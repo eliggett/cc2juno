@@ -1,0 +1,77 @@
+# cc2juno - MIDI CC to Roland Alpha Juno sysex mapping
+#
+# Each entry under 'mappings' assigns one incoming CC number to one of the
+# 36 Alpha Juno tone parameters. Names are matched case- and
+# punctuation-insensitively, so 'VCF Cutoff', 'vcf_cutoff' and 'VCF cutoff'
+# are all the same parameter. A bare parameter index (0-35) also works.
+#
+# Incoming CC values are 0-127. Parameters that accept fewer values get the
+# 128 CC steps split into equal regions - a 4-option parameter reads
+# 0-31 as option 0, 32-63 as 1, 64-95 as 2, 96-127 as 3. To take the CC
+# value literally instead (clipping above the maximum), write:
+#
+#   "Bender Range": {cc: 90, mode: clamp}
+#
+# The synth must have sysex receive switched ON (under the MIDI button) and
+# its basic channel must match midi.synth_channel below.
+
+ports:
+  input: "4ACBCC15:4ACBCC15 MIDI 1 32:0"
+  output: "AudioBox USB:AudioBox USB MIDI 1 28:0"
+
+midi:
+  synth_channel: 1        # Alpha Juno basic channel, 1-16
+  listen_channel: any     # 1-16 to accept CCs on one channel only, or 'any'
+
+  # Sysex header bytes. The Roland/PG-300 charts give level 0x20, group 0x01.
+  # A 1995 usenet transcription gives 0x01 / 0x01 instead; if your unit ignores
+  # everything this program sends, try level_byte: 0x01.
+  level_byte: 0x20
+  group_byte: 0x01
+
+  # Each sysex message is 10 bytes, about 3.2 ms on a 31250 baud DIN cable.
+  # A fast knob sweep can easily outrun the synth's input buffer, so outgoing
+  # messages are rate limited and only the newest value per parameter is kept.
+  max_msgs_per_sec: 100
+
+  # Dead zone in CC counts at the edges of a quantized parameter's regions,
+  # so a jittery pot does not flip back and forth between two options. 0 = off.
+  hysteresis: 2
+
+mappings:
+  "DCO Env. Mode":  0  # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic | NB: CC0 is normally Bank Select MSB
+  "VCF Env. Mode":  1  # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic | NB: CC1 is normally Modulation Wheel
+  "VCA Env. Mode":  2  # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic | NB: CC2 is normally Breath Controller
+  "DCO Wave Pulse": 3  # #3 | 0..3
+  "DCO Wave Saw":   4  # #4 | 0..5 | NB: CC4 is normally Foot Controller
+  "DCO Wave Sub":   5  # #5 | 0..5 | NB: CC5 is normally Portamento Time
+  "DCO Range":      6  # #6 | 0=4', 1=8', 2=16', 3=32' | NB: CC6 is normally Data Entry MSB
+  "DCO Sub Level":  7  # #7 | 0..3 | NB: CC7 is normally Channel Volume
+  "DCO Noise":      39  # #8 | 0..3 | NB: CC8 is normally Balance
+  "HPF Cutoff":     16  # #9 | 0..3
+  "Chorus Switch":  10  # #10 | 0=Off, 1=On | NB: CC10 is normally Pan
+  "DCO LFO Mod.":   11  # #11 | 0..127 | NB: CC11 is normally Expression
+  "DCO ENV Mod.":   12  # #12 | 0..127 | NB: CC12 is normally Effect Control 1
+  "DCO After Mod.": 35  # #13 | 0..127 | NB: CC13 is normally Effect Control 2
+  "DCO PWM Depth":  14  # #14 | 0..127
+  "DCO PWM Rate":   15  # #15 | 0..127 | 0 = pulse width manual, 1..127 = PW LFO rate
+  "VCF Cutoff":      9  # #16 | 0..127 | NB: CC16 is normally General Purpose 1
+  "VCF Resonance":   8  # #17 | 0..127 | NB: CC17 is normally General Purpose 2
+  "VCF LFO Mod.":   18  # #18 | 0..127 | NB: CC18 is normally General Purpose 3
+  "VCF ENV Mod.":   19  # #19 | 0..127 | NB: CC19 is normally General Purpose 4
+  "VCF Key Follow": 20  # #20 | 0..127
+  "VCF Aftertouch": 21  # #21 | 0..127
+  "VCA Level":      22  # #22 | 0..127
+  "VCA Aftertouch": 23  # #23 | 0..127
+  "LFO Rate":       24  # #24 | 0..127
+  "LFO Delay":      25  # #25 | 0..127
+  "ENV T1":         26  # #26 | 0..127 | attack time
+  "ENV L1":         27  # #27 | 0..127 | attack level
+  "ENV T2":         28  # #28 | 0..127 | break time
+  "ENV L2":         29  # #29 | 0..127 | break level
+  "ENV T3":         30  # #30 | 0..127 | decay time
+  "ENV L3":         31  # #31 | 0..127 | sustain level
+  "ENV T4":         32  # #32 | 0..127 | release time | NB: CC32 is normally LSB for CC0
+  "ENV Key Follow": 33  # #33 | 0..127 | NB: CC33 is normally LSB for CC1
+  "Chorus Rate":    13  # #34 | 0..127 | NB: CC34 is normally LSB for CC2
+  "Bender Range":   45  # #35 | 0..12 | NB: CC35 is normally LSB for CC3
