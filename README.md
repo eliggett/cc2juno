@@ -10,7 +10,7 @@ The `--thru` argument may be passed to permit notes to travel from midi in to mi
 
 ## Tulip: 
 
-Within the "tulip" is a separate and experimental version which may be loaded onto the Tulip Creative Computer. This version expects the config in the same format and it is generally best to work out the config on a computer first. The Tulip version lacks interactive assistance in the config. Once configured, your Tulip can be the bridge between a generic hardware CC box and the Alpha Juno. 
+Within the "tulip" directory is a separate and experimental version which may be loaded onto the Tulip Creative Computer. This version expects the config in the same format and it is generally best to work out the config on a computer first. The Tulip version lacks interactive assistance in the config. Once configured, your Tulip can be the bridge between a generic hardware CC box and the Alpha Juno. 
 
 ## Linux PC basic requirements: 
 
