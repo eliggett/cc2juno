@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc2juno</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <strong>cc2juno</strong>
+    <span>MIDI CC &rarr; Alpha Juno sysex</span>
+  </div>
+
+  <div class="ports">
+    <label>In
+      <select id="midi-in"><option value="">&mdash;</option></select>
+    </label>
+    <label>Out
+      <select id="midi-out"><option value="">&mdash;</option></select>
+    </label>
+    <button id="midi-enable" class="primary">Enable MIDI</button>
+    <span id="midi-status" class="status status-off">no access</span>
+  </div>
+
+  <div class="modes" role="tablist" aria-label="Mode">
+    <button id="mode-config" role="tab" class="is-active">Configure</button>
+    <button id="mode-perform" role="tab">Perform</button>
+  </div>
+
+  <div class="files">
+    <button id="do-import">Import</button>
+    <button id="do-export">Export</button>
+    <button id="do-reset" class="quiet">Reset</button>
+    <input type="file" id="file-input" accept=".yaml,.yml,text/yaml" hidden>
+  </div>
+</header>
+
+<div id="banners" class="banners" aria-live="polite"></div>
+
+<main>
+  <section class="stage">
+    <div class="stage-head">
+      <div id="layer-bar" class="layer-bar"></div>
+      <div id="stage-note" class="stage-note"></div>
+    </div>
+    <div id="grid" class="grid"></div>
+    <p id="grid-empty" class="empty-hint" hidden>
+      No knobs yet. Set the grid size, then click a cell and press <b>Learn</b>
+      while moving the control you want there.
+    </p>
+  </section>
+
+  <aside class="side">
+
+    <!-- ------------------------------------------------ configure mode -->
+    <div id="panel-config">
+
+      <section class="panel" id="panel-inspector" hidden>
+        <h2 id="inspector-title">Knob</h2>
+
+        <div class="field">
+          <label for="knob-cc">CC number</label>
+          <div class="row">
+            <input type="number" id="knob-cc" min="0" max="127" step="1">
+            <button id="knob-learn">Learn</button>
+          </div>
+          <p class="hint" id="knob-learn-hint">
+            Press Learn, then move the control. It must travel 6 counts, so
+            brushing past a neighbour will not grab it.
+          </p>
+        </div>
+
+        <div class="field" id="knob-function-field">
+          <label for="knob-param">Function on this layer</label>
+          <select id="knob-param"></select>
+          <p class="hint" id="knob-range"></p>
+        </div>
+
+        <div class="field" id="knob-mode-field">
+          <label for="knob-mode">Value scaling</label>
+          <select id="knob-mode">
+            <option value="scale">Scale &mdash; split 0-127 into equal regions</option>
+            <option value="clamp">Clamp &mdash; take the CC value literally</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>
+            <input type="checkbox" id="knob-is-layer">
+            Use this knob to select the layer
+          </label>
+          <p class="hint">
+            The layer knob means the same thing on every layer, so it can never
+            also be a parameter.
+          </p>
+        </div>
+
+        <div class="row">
+          <button id="knob-clear">Clear function</button>
+          <button id="knob-remove" class="quiet">Remove knob</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Knob grid</h2>
+        <div class="row">
+          <div class="field">
+            <label for="grid-rows">Rows</label>
+            <input type="number" id="grid-rows" min="1" max="32" step="1">
+          </div>
+          <div class="field">
+            <label for="grid-cols">Columns</label>
+            <input type="number" id="grid-cols" min="1" max="32" step="1">
+          </div>
+        </div>
+        <p class="hint">
+          16 knobs in a row is <code>1 &times; 16</code>; three rows of four is
+          <code>3 &times; 4</code>. Knobs keep their reading order when the grid
+          is reshaped.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Layers</h2>
+        <div class="row">
+          <div class="field">
+            <label for="layer-count">How many</label>
+            <select id="layer-count"></select>
+          </div>
+          <div class="field">
+            <label for="layer-startup">Start on</label>
+            <select id="layer-startup"></select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="layer-hysteresis">Layer knob dead zone</label>
+          <input type="number" id="layer-hysteresis" min="0" max="16" step="1"
+                 placeholder="same as MIDI hysteresis">
+          <p class="hint">
+            A stray layer change is more disruptive than a stray enum flip, so
+            this can be wider than the general dead zone. Blank follows it.
+          </p>
+        </div>
+        <div class="field">
+          <label>Names</label>
+          <div id="layer-names" class="layer-names"></div>
+        </div>
+        <p class="hint" id="layer-knob-note"></p>
+      </section>
+
+      <section class="panel">
+        <h2>MIDI</h2>
+        <div class="row">
+          <div class="field">
+            <label for="synth-channel">Synth channel</label>
+            <select id="synth-channel"></select>
+          </div>
+          <div class="field">
+            <label for="listen-channel">Listen on</label>
+            <select id="listen-channel"></select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="level-byte">Level byte</label>
+            <input type="text" id="level-byte" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="group-byte">Group byte</label>
+            <input type="text" id="group-byte" spellcheck="false">
+          </div>
+        </div>
+        <p class="hint">
+          The Roland/PG-300 charts give <code>0x20</code> / <code>0x01</code>. If
+          the synth ignores everything, try a level byte of <code>0x01</code>.
+        </p>
+        <div class="row">
+          <div class="field">
+            <label for="max-rate">Max messages/sec</label>
+            <input type="number" id="max-rate" min="1" max="1000" step="1">
+          </div>
+          <div class="field">
+            <label for="hysteresis">Hysteresis</label>
+            <input type="number" id="hysteresis" min="0" max="16" step="1">
+          </div>
+        </div>
+        <div class="field">
+          <label><input type="checkbox" id="thru"> MIDI thru</label>
+          <p class="hint">
+            Forward notes, bend, aftertouch and unmapped CCs to the output, so
+            one keyboard can play the synth and edit it. Mapped CCs are consumed.
+          </p>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- -------------------------------------------------- perform mode -->
+    <div id="panel-perform" hidden>
+      <section class="panel">
+        <h2>Running</h2>
+        <dl id="perform-summary" class="summary"></dl>
+      </section>
+
+      <section class="panel log-panel">
+        <h2>
+          Activity
+          <button id="log-clear" class="quiet small">Clear</button>
+        </h2>
+        <label class="hint">
+          <input type="checkbox" id="log-verbose"> show the sysex bytes
+        </label>
+        <div id="log" class="log" role="log"></div>
+      </section>
+    </div>
+
+  </aside>
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

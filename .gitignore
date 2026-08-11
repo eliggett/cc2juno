@@ -1,0 +1,12 @@
+# macOS specific hidden files
+.DS_Store
+._*
+
+# Python cache directories and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Certs:
+*.pem

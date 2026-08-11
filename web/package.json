@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "comment": "There is nothing to install and nothing to build. This file exists only so that `node test_web.mjs` treats the .js files as ES modules, which is what the browser does with them anyway. Browsers ignore it."
+}
