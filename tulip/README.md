@@ -32,6 +32,7 @@ To keep hold of it from the REPL:
     cc2juno.start()          # or start(thru=True), start(log='verbose')
     cc2juno.status()         # counters
     cc2juno.params()         # the 36 parameter names and ranges
+    cc2juno.layers()         # the layer table, and which layer is live
     cc2juno.stop()           # flush what is queued, then unhook
 
 `start()` hooks the callbacks and returns, so the REPL stays usable while it
@@ -62,7 +63,8 @@ it at one, so anything translated or passed through reaches both.
 ## Config
 
 Identical to the desktop file. See the main [README](../README.md) for the full
-description of mappings, `off`, scaling modes and hysteresis. Two differences:
+description of mappings, `off`, scaling modes, hysteresis and layering. Two
+differences:
 
 - **`ports:` is read and ignored.** Tulip has nothing to select, so the section
   is harmless if your file has one.
@@ -78,6 +80,13 @@ description of mappings, `off`, scaling modes and hysteresis. Two differences:
 
 `start()` arguments override the file: `start(thru=True)`, `start(log='off')`,
 `start('/user/other.yaml')`.
+
+Layering works here too, and is where a Tulip earns its keep: with no screen to
+edit and no learn mode, one knob switching between ten sets of assignments is how
+a small controller reaches all 36 parameters. Layer names are one comma-separated
+string rather than a YAML list precisely because `miniyaml` has no lists, so the
+same file still loads on both. `layers()` prints which slice of the layer knob
+selects what, and which layer is live right now.
 
 ## What is different from the desktop version
 

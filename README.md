@@ -4,9 +4,26 @@ Translate MIDI CC messages into Roland Alpha Juno 1/2 (and MKS-50) tone paramete
 
 In effect, an inexpensive generic MIDI CC box can become a PG-300. 
 
+cc2juno needs a computer to do this. There are three options:
+
+1. Use your web browser: Just head over to https://eliggett.github.io/cc2juno/
+2. Run it on the command-line via python -- great for a raspberry pi, for example
+3. Run it on the Tulip Creative Computer (see the tulip directory for details)
+
 cc2juno converts any knob on your midi controller to the correct sysex for the Roland Alpha Juno to interpret per your configuration within the cc2juno.yaml file. Parameters which have only a few selections (such as DCO Range) are handled by dividing CC knob into ranges for each sysex value. 
 
+A controller with fewer knobs than the synth has parameters can give one knob up to selecting a *layer* — up to ten complete sets of knob assignments, switched by that one knob. See [Layering](#layering).
+
 The `--thru` argument may be passed to permit notes to travel from midi in to midi out -- great for controller-keyboard combos. 
+
+## Web:
+
+Within the "web" directory is a browser version, built on Web MIDI. It draws your
+controller as a grid of knobs (and you define the grid) and lets you click one to learn its CC and pick its
+function, which is a good deal friendlier than editing YAML by hand — and it
+imports and exports exactly the file the other builds read. See
+[web/README.md](web/README.md). A development HTTPS server is included, since Web
+MIDI needs a secure context. Or, you can launch the latest version directly from [here](https://eliggett.github.io/cc2juno/). 
 
 ## Tulip: 
 
@@ -16,8 +33,10 @@ Within the "tulip" directory is a separate and experimental version which may be
 
 Requires Python 3 with `mido`, `python-rtmidi` and `PyYAML`:
 
-    sudo apt install python3-mido python3-rtmidi python3-yaml
-    # or: pip install mido python-rtmidi pyyaml
+```bash
+sudo apt install python3-mido python3-rtmidi python3-yaml
+# or: pip install mido python-rtmidi pyyaml
+```
 
 ## Two things to set on the synth first
 
@@ -31,6 +50,7 @@ Requires Python 3 with `mido`, `python-rtmidi` and `PyYAML`:
     ./cc2juno.py --init-config      # write a starting-point cc2juno.yaml
     ./cc2juno.py                    # pick ports interactively, then run
     ./cc2juno.py --learn            # assign CCs by moving your controls
+    ./cc2juno.py --layer 2          # start on layer 2 (see Layering)
 
     ./cc2juno.py --list-ports       # show MIDI inputs and outputs
     ./cc2juno.py --list-params      # show the 36 Alpha Juno parameters
@@ -145,6 +165,100 @@ pot resting on a boundary does not flip back and forth between two options. It
 only applies to quantized parameters and only to single-region moves, so a fast
 sweep is never held back. Set it to `0` to disable.
 
+## Layering
+
+A controller with ten knobs can reach all 36 parameters if one knob is given up
+to selecting which set of assignments the other knobs use. That knob's 0-127
+travel is cut into one region per layer, exactly the way a 4-option parameter is
+cut into four, and up to ten layers can be defined.
+
+    layers:
+      cc: 105                          # the knob that selects the layer
+      count: 3
+      names: "Filter, Envelope, LFO"   # optional, for the log only
+      startup: 1                       # layer to assume until the knob moves
+      hysteresis: 3                    # optional, defaults to midi.hysteresis
+
+    layer1:
+      "VCF Cutoff":    16
+      "VCF Resonance": 17
+
+    layer2:
+      "ENV T1": 16
+      "ENV L1": 17
+
+    layer3:
+      "LFO Rate":  16
+      "LFO Delay": 17
+
+Each layer is a complete `mappings:` block under its own name. `mappings:` is
+still accepted as the name for layer 1, so every config written before layering
+existed keeps working unchanged, and a file with no `layers:` section behaves
+exactly as it always did.
+
+The easiest way to build one is `--learn`, which asks how many layers you want
+and which knob selects them before it starts walking the parameters. To write the
+file by hand instead:
+
+    ./cc2juno.py --init-config --layers 4 --layer-cc 105
+    ./cc2juno.py --learn --layer 2      # assign one layer, leave the others alone
+    ./cc2juno.py --layer 3              # start on layer 3
+
+The same CC on different layers is the whole point and is never a conflict; the
+same CC twice *within* one layer is still an error. A layer with nothing mapped
+is legal and useful as a parked position where no knob does anything. The layer
+knob cannot also be mapped to a parameter, since it has to mean the same thing on
+every layer.
+
+Layer names are one comma-separated string rather than a YAML list because the
+Tulip build's YAML reader has no lists, and both builds read the same file.
+
+### Knob layout
+
+The web build needs to know where the knobs physically are, which nothing else in
+the file says, so it adds an optional section:
+
+    layout:
+      rows: 3
+      cols: 4
+      ccs: "15, 2, 9, 6, 3, 11, 13, 10, 7, 4, 12, off"
+
+Row-major, one entry per cell, `off` for a gap, and one comma-separated string
+rather than a list for the same reason the layer names are. The layer knob is
+whichever cell holds `layers.cc`.
+
+This build never draws anything, but it does read the section, check it, and
+write it back out, so `--learn --save` does not throw the grid away. A short list
+is padded with empty cells; a CC in two cells, or more cells than the grid has,
+is an error. The Tulip build skips the section entirely.
+
+### What layering does not do
+
+**Switching layers sends nothing to the synth.** After a switch the knobs are all
+physically pointing at values that belonged to the previous layer, and resending
+from those stale positions would overwrite the patch with junk. Each knob takes
+effect on its next move, and takes effect *immediately* at wherever it happens to
+be — so the first nudge of a knob after a layer change will jump the parameter.
+That is the trade for not having a motorised controller.
+
+**The knob's real position cannot be read at startup**, only when it next moves.
+The program assumes layer 1 (or `startup:` / `--layer`) until then, so the first
+thing worth doing after starting is to move the layer knob.
+
+Knobs mapped on *any* layer are consumed on *every* layer: a knob that is VCF
+Cutoff on layer 2 stays silent on layer 1 rather than escaping to the synth as a
+raw CC that would mean something else. Only CCs mapped nowhere — the mod wheel,
+the sustain pedal — pass through. Each idle knob is reported once per layer:
+
+    Received CC18  val 60  -> nothing on layer 1 (Filter) (mapped on layer 2), ignored
+    Received CC105 val 60  -> layer 2 (Envelope), 7 knob(s) mapped
+
+The layer knob gets the same boundary dead zone as any other quantized control,
+so a pot resting on an edge cannot flip between two layers. With ten layers each
+region is about 13 CC counts wide, which the default `hysteresis: 2` sits inside
+comfortably; `layers.hysteresis` can widen it, since a stray layer change is more
+disruptive than a stray enum flip.
+
 ## Thru
 
 `--thru` (or `thru: true` under `midi:` in the config) forwards everything this
@@ -183,16 +297,75 @@ steps all mean the same thing — is never sent twice in a row.
 
 ## Learn mode
 
-`--learn` walks the parameter list in order and waits for you to move a control:
+`--learn` asks about layers first, then walks the parameter list waiting for you
+to move a control:
 
+    Use layers? [y/N] y
+    How many layers? [1-10] 4
+
+    First, the layer knob itself. It means the same thing on every layer,
+    so it can never be one of the parameter assignments.
+      move the knob that will select the layer... got CC105
+
+    === Layer 1 (1 of 4) ===
     [ 1/36] DCO Env. Mode  (0=Normal, 1=Inverted, ...)  [unassigned]
-             move a control... got CC70
+             move a control  (Enter skip, x clear, b back, n next layer, q finish)... got CC70
 
-At each prompt: **Enter** keeps the current assignment and moves on, **x**
-unassigns it, **b** goes back one, **q** finishes early. Assigning a CC that is
-already in use moves it, leaving the old parameter unassigned. Nothing is written
-until you confirm at the end. Learn starts from your existing config, so it can
-be used to fix up a few entries rather than starting over.
+Answer **n** to the first question for a single-layer config, exactly as before.
+If the config already has layers, learn offers to keep that arrangement rather
+than asking again.
+
+At each prompt: **Enter** leaves the parameter unassigned and moves on, **x**
+clears something you just assigned, **b** goes back one, **n** skips the rest of
+this layer, and **q** stops there and goes straight to the save prompt. Assigning
+a CC that is already in use on that layer moves it, leaving the old parameter
+unassigned. Nothing is written until you confirm at the end.
+
+**Learn starts from a clean sheet.** What is already in `cc2juno.yaml` is not
+read in as though you had just assigned it, so the count at the end is what you
+actually moved, and the later layers offer everything the earlier ones did not
+take. Saving therefore *replaces* the mappings rather than adding to them; the
+save prompt says how many assignments in the existing file are about to go, and
+answering anything but `y` leaves the file untouched. A walk that assigns nothing
+never writes at all.
+
+`--learn --layer 2` is the exception worth knowing: it walks layer 2 from empty
+but keeps every other layer exactly as the file has it, so one layer can be
+redone without disturbing the rest.
+
+### Ending the walk
+
+Three ways, and none of them requires sitting through all 36 prompts:
+
+- **`q` at any prompt** — stop now, keeping everything assigned so far, and go to
+  the save confirmation.
+- **`n`, then `q` at the checkpoint** between layers. Each layer ends with a line
+  saying how many parameters are still free, and Enter carries on to the next one.
+- **Naturally** — the walk stops on its own when the layers run out, or earlier if
+  all 36 parameters have been assigned.
+
+Later layers only offer what the earlier ones did not take **in this session**,
+so each layer is shorter than the last (`[ 1/34]` after two were assigned on
+layer 1). That is what makes exhausting the parameter list realistic rather than
+a 36-prompt slog per layer.
+
+### How much a knob must move
+
+A control has to travel **6 CC counts within one prompt** before it is taken as
+the answer, so brushing a knob on the way to another one no longer assigns it.
+The widest excursion during that prompt counts, so a sweep up and back registers
+either way.
+
+    ./cc2juno.py --learn --learn-threshold 12   # stiffer, for a twitchy controller
+    ./cc2juno.py --learn --learn-threshold 0    # any single message counts
+
+A switch or button that sends one value per press moves 0 counts, so press it
+twice — the second press sends the other value and registers. `--learn-threshold 0`
+restores the old behaviour if a control really can only ever send one message.
+
+The layer knob is refused if you move it at a parameter prompt, since it cannot
+also be a parameter; if it was mapped to one in the existing config, learn drops
+that assignment and says so.
 
 ## Sysex format
 
@@ -213,3 +386,5 @@ try again.
 | `config.py` | Config load / validate / generate |
 | `midi_io.py` | Port discovery and selection |
 | `test_scaling.py` | Boundary tests — run `./test_scaling.py` |
+| `web/` | The browser build — see [web/README.md](web/README.md) |
+| `tulip/` | The Tulip Creative Computer build |

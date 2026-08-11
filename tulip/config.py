@@ -8,11 +8,15 @@ no ports to choose and no interactive setup:
     into one input and sends to both outputs, so there is nothing to select
   * `midi.log` is read here and ignored by the desktop version
   * there is no writer: configs are edited on screen or copied in
+
+Layering (a `layers:` section plus `layer1:` ... `layer10:`) works the same on
+both, which is why the layer names are one comma-separated string rather than a
+YAML list: miniyaml has no lists.
 """
 
 import alpha_juno
 import miniyaml
-from alpha_juno import PARAMETERS
+from alpha_juno import MAX_LAYERS, PARAMETERS
 
 DEFAULT_CONFIG_NAME = "cc2juno.yaml"
 
@@ -43,6 +47,22 @@ class Mapping:
         self.mode = mode
 
 
+class LayerMap:
+    """One layer: a complete set of knob assignments, selected by the layer knob."""
+
+    def __init__(self, number=1, name=""):
+        self.number = number                # 1-based, as written in the config
+        self.name = name
+        self.by_cc = {}                     # CC number -> Mapping
+        self.disabled = set()               # parameter indexes explicitly switched off
+
+    @property
+    def label(self):
+        if self.name:
+            return "{} ({})".format(self.number, self.name)
+        return str(self.number)
+
+
 class Config:
     def __init__(self):
         self.synth_channel = 1
@@ -53,12 +73,50 @@ class Config:
         self.hysteresis = 2
         self.thru = False                   # forward untranslated traffic to the output
         self.log = LOG_NORMAL
-        self.by_cc = {}                     # CC number -> Mapping
-        self.disabled = set()               # parameter indexes explicitly switched off
+        self.layer_cc = None                # None = no layering, one fixed layer
+        self.startup_layer = 1              # 1-based; the knob's position is unknowable
+        self.layer_hysteresis = None        # None = use `hysteresis`
+        self.layers = [LayerMap(1)]
         self.path = None                    # filled in by load()
 
-    def lookup_cc(self, cc):
-        return self.by_cc.get(cc)
+    # An unlayered config is just a layered one with a single layer, so the
+    # single-layer accessors stay pointed at layer 1 rather than growing an
+    # `if self.layering` at every call site.
+    @property
+    def by_cc(self):
+        return self.layers[0].by_cc
+
+    @property
+    def disabled(self):
+        return self.layers[0].disabled
+
+    @property
+    def layering(self):
+        return self.layer_cc is not None
+
+    @property
+    def layer_count(self):
+        return len(self.layers)
+
+    def lookup_cc(self, cc, layer=0):
+        return self.layers[layer].by_cc.get(cc)
+
+    def all_mapped_ccs(self):
+        """Every CC assigned on any layer.
+
+        The controller sends the same CCs whatever layer is selected, so this is
+        the set that must never reach the synth as raw CC data.
+        """
+        out = set()
+        for layer in self.layers:
+            for cc in layer.by_cc:
+                out.add(cc)
+        return out
+
+    def layer_edge_hysteresis(self):
+        if self.layer_hysteresis is None:
+            return self.hysteresis
+        return self.layer_hysteresis
 
 
 def _quote(value):
@@ -164,62 +222,184 @@ def parse(raw, source="config"):
     cfg.thru = _require_bool(midi.get("thru", False), "midi.thru")
     cfg.log = _require_log(midi.get("log"), "midi.log")
 
-    mappings = raw.get("mappings")
-    if mappings is None:
-        raise ConfigError("{}: no 'mappings' section found".format(source))
-    if not isinstance(mappings, dict):
-        raise ConfigError(
-            "{}: 'mappings' must be a mapping of parameter name -> CC".format(source))
+    sections = _layer_sections(raw, source)
+    _parse_layers_block(cfg, raw.get("layers"), sections, source)
 
+    for layer in cfg.layers:
+        entry = sections.get(layer.number)
+        if entry is not None:
+            _fill_layer(layer, entry[1], entry[0], source)
+
+    if cfg.layering:
+        for layer in cfg.layers:
+            clash = layer.by_cc.get(cfg.layer_cc)
+            if clash is not None:
+                raise ConfigError(
+                    "{}: CC{} selects the layer, so it cannot also be mapped to {} "
+                    "on layer {}".format(source, cfg.layer_cc,
+                                         _quote(clash.param.name), layer.number))
+
+    for layer in cfg.layers:
+        if layer.by_cc:
+            return cfg
+
+    where = "every layer" if cfg.layering else "'mappings'"
+    for layer in cfg.layers:
+        if layer.disabled:
+            raise ConfigError("{}: every parameter in {} is switched off, "
+                              "nothing to do".format(source, where))
+    raise ConfigError("{}: {} is empty, nothing to do".format(source, where))
+
+
+def _layer_number(key):
+    """1 for 'mappings', N for 'layerN', None for anything else."""
+    if key == "mappings":
+        return 1
+    if not isinstance(key, str) or not key.startswith("layer") or key == "layers":
+        return None
+    digits = key[5:]
+    if not digits or not digits.isdigit():
+        return None
+    return int(digits)
+
+
+def _layer_sections(raw, source):
+    """Find the per-layer mapping sections, keyed by 1-based layer number.
+
+    Anything else at the top level is an error rather than something quietly
+    skipped: a mistyped 'mapings' or 'layar2' would otherwise throw away a whole
+    set of assignments and leave the knobs doing nothing for no visible reason.
+    """
+    sections = {}
+    for key in raw:
+        # 'layout' describes where the knobs physically sit, which only the web
+        # front-end draws. It is skipped rather than rejected so one config file
+        # still serves every build; the Tulip has no screen to lay them out on.
+        if key in ("ports", "midi", "layers", "layout"):
+            continue
+        number = _layer_number(key)
+        if number is None:
+            raise ConfigError(
+                "{}: unknown top-level section {}. Expected 'ports', 'midi', 'layers', "
+                "'layout', 'mappings', or 'layer1' ... 'layer{}'.".format(
+                    source, _quote(key), MAX_LAYERS))
+        if not 1 <= number <= MAX_LAYERS:
+            raise ConfigError("{}: section {}: layers are numbered 1-{}".format(
+                source, _quote(key), MAX_LAYERS))
+        if number in sections:
+            raise ConfigError("{}: layer {} is defined twice (as {} and {})".format(
+                source, number, _quote(sections[number][0]), _quote(key)))
+        entries = raw[key]
+        if not isinstance(entries, dict):
+            raise ConfigError("{}: {} must be a mapping of parameter name -> CC".format(
+                source, _quote(key)))
+        sections[number] = (key, entries)
+
+    if not sections:
+        raise ConfigError("{}: no 'mappings' section found".format(source))
+    return sections
+
+
+def _layer_names(value, count, source):
+    """Split the optional comma-separated layer names."""
+    if value is None:
+        return [""] * count
+    names = []
+    for part in str(value).split(","):
+        names.append(part.strip())
+    while names and not names[-1]:
+        names.pop()
+    if len(names) > count:
+        raise ConfigError("{}: layers.names lists {} names but there are only "
+                          "{} layers".format(source, len(names), count))
+    return names + [""] * (count - len(names))
+
+
+def _parse_layers_block(cfg, block, sections, source):
+    """Read the `layers:` section and size cfg.layers to match."""
+    highest = max(sections)
+
+    if block is None:
+        if highest > 1:
+            raise ConfigError(
+                "{}: layer sections are defined but there is no 'layers:' section "
+                "saying which CC selects between them. Add:\n"
+                "  layers:\n    cc: 41".format(source))
+        cfg.layers = [LayerMap(1)]
+        return
+
+    if not isinstance(block, dict):
+        raise ConfigError("{}: 'layers' must be a mapping with a 'cc' value".format(source))
+    if "cc" not in block or is_disabled(block.get("cc")):
+        raise ConfigError("{}: 'layers' needs a 'cc' value naming the knob that selects "
+                          "the layer (or delete the section to switch layering "
+                          "off)".format(source))
+
+    cfg.layer_cc = _require_int(block["cc"], "layers.cc", 0, 127)
+    count = _require_int(block.get("count", highest), "layers.count", 1, MAX_LAYERS)
+    if count < highest:
+        raise ConfigError("{}: layers.count is {} but 'layer{}' is defined; raise the "
+                          "count or delete the section".format(source, count, highest))
+
+    cfg.startup_layer = _require_int(block.get("startup", 1), "layers.startup", 1, count)
+    if "hysteresis" in block:
+        cfg.layer_hysteresis = _require_int(block["hysteresis"], "layers.hysteresis", 0, 16)
+
+    names = _layer_names(block.get("names"), count, source)
+    cfg.layers = []
+    for n in range(count):
+        cfg.layers.append(LayerMap(n + 1, names[n]))
+
+
+def _fill_layer(layer, mappings, section, source):
+    """Read one layer's parameter -> CC assignments into `layer`."""
     seen_params = {}
     for key in mappings:
         entry = mappings[key]
         param = alpha_juno.lookup(key)
         if param is None:
             raise ConfigError(
-                "{}: unknown parameter name {}. "
-                "See cc2juno.params() for the 36 valid names.".format(source, _quote(key)))
+                "{}: {}: unknown parameter name {}. "
+                "See cc2juno.params() for the 36 valid names.".format(
+                    source, section, _quote(key)))
 
         mode = "scale"
         if isinstance(entry, dict):
             if "cc" not in entry:
-                raise ConfigError("{}: mapping for {} has no 'cc' value "
-                                  "(use 'off' to disable it)".format(source, _quote(key)))
+                raise ConfigError("{}: {}: mapping for {} has no 'cc' value "
+                                  "(use 'off' to disable it)".format(
+                                      source, section, _quote(key)))
             cc_raw = entry["cc"]
             mode = str(entry.get("mode", "scale")).lower()
             if mode not in ("scale", "clamp"):
-                raise ConfigError("{}: mapping for {} has unknown mode {} "
+                raise ConfigError("{}: {}: mapping for {} has unknown mode {} "
                                   "(expected 'scale' or 'clamp')".format(
-                                      source, _quote(key), _quote(mode)))
+                                      source, section, _quote(key), _quote(mode)))
         else:
             cc_raw = entry
 
         # A parameter named twice is a typo worth reporting even if one is disabled.
         if param.index in seen_params:
-            raise ConfigError("{}: {} is mapped twice (as {} and {})".format(
-                source, param.name, _quote(seen_params[param.index]), _quote(key)))
+            raise ConfigError("{}: {}: {} is mapped twice (as {} and {})".format(
+                source, section, param.name,
+                _quote(seen_params[param.index]), _quote(key)))
         seen_params[param.index] = key
 
         if is_disabled(cc_raw):
-            cfg.disabled.add(param.index)
+            layer.disabled.add(param.index)
             continue
 
         if isinstance(cc_raw, bool):   # a bare `on`/`yes`, which is never a CC number
-            raise ConfigError("{}: CC for {}: expected a number 0-127 or 'off', "
-                              "got 'on'".format(source, _quote(key)))
-        cc = _require_int(cc_raw, "{}: CC for {}".format(source, _quote(key)), 0, 127)
+            raise ConfigError("{}: {}: CC for {}: expected a number 0-127 or 'off', "
+                              "got 'on'".format(source, section, _quote(key)))
+        cc = _require_int(cc_raw, "{}: {}: CC for {}".format(
+            source, section, _quote(key)), 0, 127)
 
-        if cc in cfg.by_cc:
-            raise ConfigError("{}: CC{} is assigned to both {} and {}".format(
-                source, cc, _quote(cfg.by_cc[cc].param.name), _quote(param.name)))
-        cfg.by_cc[cc] = Mapping(cc, param, mode)
-
-    if not cfg.by_cc:
-        if cfg.disabled:
-            raise ConfigError("{}: every parameter in 'mappings' is switched off, "
-                              "nothing to do".format(source))
-        raise ConfigError("{}: 'mappings' is empty, nothing to do".format(source))
-    return cfg
+        if cc in layer.by_cc:
+            raise ConfigError("{}: {}: CC{} is assigned to both {} and {}".format(
+                source, section, cc,
+                _quote(layer.by_cc[cc].param.name), _quote(param.name)))
+        layer.by_cc[cc] = Mapping(cc, param, mode)
 
 
 def find(path=None):

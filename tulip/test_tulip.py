@@ -76,6 +76,29 @@ mappings:
 
 CONFIG_PATH = "/tmp/cc2juno_test.yaml"
 
+# One knob (CC41) picks the layer; CC16 means something different on each.
+LAYERED_TEXT = """\
+midi:
+  hysteresis: 2
+
+layers:
+  cc: 41
+  count: 3
+  names: "Filter, Envelope"
+
+layer1:
+  "VCF Cutoff": 16
+  "VCF Resonance": 17
+
+layer2:
+  "ENV T1": 16
+  "DCO Range": 18
+
+layer3:
+"""
+
+LAYERED_PATH = "/tmp/cc2juno_test_layers.yaml"
+
 FAILS = []
 
 
@@ -98,7 +121,7 @@ def frames(n=1, ms=30):
         cc2juno._on_frame()
 
 
-def reset(**kw):
+def reset(path=None, **kw):
     del sent[:]
     cc2juno._router = None
     hooks["midi"] = []
@@ -109,7 +132,7 @@ def reset(**kw):
     out = sys.stdout
     sys.stdout = open("/dev/null", "w") if quiet else out
     try:
-        started = cc2juno.start(CONFIG_PATH, **kw)
+        started = cc2juno.start(path or CONFIG_PATH, **kw)
     finally:
         if quiet:
             sys.stdout.close()
@@ -177,6 +200,17 @@ check("clamp mode kept", cfg.by_cc[90].mode == "clamp", cfg.by_cc[90].mode)
 check("hex level byte", cfg.level_byte == 0x20)
 check("listen_channel any is None", cfg.listen_channel is None)
 check("ports section ignored, not rejected", True)
+
+# The web build writes a 'layout:' section describing where the knobs sit. The
+# Tulip has no screen to draw them on, but the two share this file, so the
+# section has to be skipped rather than rejected as an unknown top level.
+_layout_text = ('layout:\n  rows: 2\n  cols: 3\n  ccs: "16, 17, off"\n'
+                'mappings:\n  "VCF Cutoff": 16\n')
+_layout_cfg = config_mod.parse(miniyaml.loads(_layout_text), "test")
+check("layout section skipped, not rejected", len(_layout_cfg.by_cc) == 1,
+      len(_layout_cfg.by_cc))
+check("layout is not read as a layer", _layout_cfg.layer_count == 1,
+      _layout_cfg.layer_count)
 
 for text, why in (
     ('mappings:\n  "Nope": 1\n', "unknown parameter"),
@@ -361,6 +395,97 @@ finally:
 check("queued sysex flushed", len(sent) == 2, sent)
 check("midi callback removed", hooks["midi"] == [], hooks["midi"])
 check("frame callback removed", hooks["frame"] == [], hooks["frame"])
+
+section("layering")
+handle = open(LAYERED_PATH, "w")
+handle.write(LAYERED_TEXT)
+handle.close()
+
+raw = miniyaml.loads(LAYERED_TEXT)
+check("mini yaml reads the layer sections",
+      sorted(raw.keys()) == ["layer1", "layer2", "layer3", "layers", "midi"], sorted(raw))
+
+cfg = config_mod.load(LAYERED_PATH)
+check("layer knob found", cfg.layering and cfg.layer_cc == 41, cfg.layer_cc)
+check("three layers", cfg.layer_count == 3, cfg.layer_count)
+check("names split from one string",
+      [l.name for l in cfg.layers] == ["Filter", "Envelope", ""],
+      [l.name for l in cfg.layers])
+check("same CC means different things per layer",
+      cfg.lookup_cc(16, 0).param.name == "VCF Cutoff"
+      and cfg.lookup_cc(16, 1).param.name == "ENV T1")
+check("an empty layer is legal", cfg.lookup_cc(16, 2) is None)
+check("every knob is known", cfg.all_mapped_ccs() == set([16, 17, 18]),
+      sorted(cfg.all_mapped_ccs()))
+check("by_cc still means layer 1", cfg.by_cc[16].param.name == "VCF Cutoff")
+
+for text, why in (
+    ('layers:\n  cc: 41\nlayer1:\n  "VCF Cutoff": 41\n', "layer knob also mapped"),
+    ('layers:\n  count: 2\nlayer1:\n  "VCF Cutoff": 16\n', "layers block with no cc"),
+    ('layer1:\n  "VCF Cutoff": 16\nlayer2:\n  "LFO Rate": 16\n', "layers with no knob"),
+    ('layers:\n  cc: 41\n  count: 11\nlayer1:\n  "VCF Cutoff": 16\n', "11 layers"),
+    ('layers:\n  cc: 41\n  count: 1\nlayer2:\n  "VCF Cutoff": 16\n', "count below sections"),
+    ('layers:\n  cc: 41\nmappings:\n  "VCF Cutoff": 16\nlayer1:\n  "LFO Rate": 17\n',
+     "mappings and layer1 both"),
+    ('layers:\n  cc: 41\nlayer1:\n  "VCF Cutoff": 16\nlayar2:\n  "LFO Rate": 17\n',
+     "a misspelled section"),
+    ('layers:\n  cc: 41\n  count: 2\nlayer1:\n  "VCF Cutoff": off\n', "every layer empty"),
+):
+    msg = raises(lambda t=text: config_mod.parse(miniyaml.loads(t), "test"),
+                 config_mod.ConfigError)
+    check("rejects " + why, msg is not None, msg)
+
+section("the layer knob reinterprets the other knobs")
+reset(LAYERED_PATH)
+cc2juno._on_midi([0xB0, 16, 99])
+frames()
+check("layer 1: CC16 is VCF Cutoff", len(sent) == 1 and sent[0][7] == 16, sent)
+
+del sent[:]
+cc2juno._on_midi([0xB0, 41, 60])        # into layer 2's region
+check("layer changed", cc2juno._router.layer == 1, cc2juno._router.layer)
+check("changing layer sends nothing", sent == [], sent)
+
+cc2juno._on_midi([0xB0, 16, 99])
+frames()
+check("layer 2: the same knob is ENV T1", len(sent) == 1 and sent[0][7] == 26, sent)
+
+section("the layer knob does not flutter on a region edge")
+reset(LAYERED_PATH)
+cc2juno._on_midi([0xB0, 41, 60])
+for value in (43, 42, 43, 44):
+    cc2juno._on_midi([0xB0, 41, value])
+    check("CC41 val %d holds layer 2" % value, cc2juno._router.layer == 1,
+          cc2juno._router.layer)
+cc2juno._on_midi([0xB0, 41, 10])
+check("a deliberate move does switch", cc2juno._router.layer == 0)
+
+section("knobs never leak as raw CC")
+reset(LAYERED_PATH, thru=True)
+cc2juno._on_midi([0xB0, 18, 60])        # mapped on layer 2 only
+frames()
+check("a knob idle on this layer is consumed", sent == [], sent)
+check("counted as idle, not unmapped", cc2juno._router.stats["inactive"] == 1
+      and cc2juno._router.stats["thru"] == 0, cc2juno._router.stats)
+cc2juno._on_midi([0xB0, 41, 60])
+check("the layer knob is never forwarded", cc2juno._router.stats["thru"] == 0)
+cc2juno._on_midi([0xB0, 1, 64])         # the mod wheel is not one of the knobs
+check("unmapped CCs still pass through", cc2juno._router.stats["thru"] == 1,
+      cc2juno._router.stats)
+
+section("layer regions, every count")
+for count in range(1, alpha_juno.MAX_LAYERS + 1):
+    p = alpha_juno.make_layer_param(count)
+    values = [alpha_juno.scale(p, cc) for cc in range(128)]
+    widths = {}
+    for v in values:
+        widths[v] = widths.get(v, 0) + 1
+    check("%d layers: each reachable, in order, evenly" % count,
+          set(values) == set(range(count)) and values == sorted(values)
+          and max(widths.values()) - min(widths.values()) <= 1, widths)
+check("a layer is never sendable",
+      raises(lambda: alpha_juno.build_sysex(alpha_juno.make_layer_param(3).index, 0),
+             ValueError) is not None)
 
 section("the parameter table survived the port")
 check("36 parameters", len(alpha_juno.PARAMETERS) == 36)

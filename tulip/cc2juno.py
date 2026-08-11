@@ -11,6 +11,7 @@ or, to keep control of it from the REPL:
     import cc2juno
     cc2juno.start()
     cc2juno.status()
+    cc2juno.layers()
     cc2juno.stop()
 
 Everything is configured in cc2juno.yaml - the same file the desktop version
@@ -94,10 +95,20 @@ class Router:
         self.interval = max(1, 1000 // cfg.max_msgs_per_sec)
         self.next_send = ticks_ms()
 
-        self.unmapped_seen = set()
+        # Layer state. `pending` and `last_value` are keyed by parameter, not by
+        # CC, so they stay correct across a layer change: a parameter is the same
+        # parameter whichever layer's knob reached it.
+        self.layer = cfg.startup_layer - 1
+        self.layer_param = alpha_juno.make_layer_param(cfg.layer_count)
+        self.layer_hysteresis = cfg.layer_edge_hysteresis()
+        self.mapped_ccs = cfg.all_mapped_ccs()
+
+        self.unmapped_seen = set()   # (layer, cc)
+        self.inactive_seen = set()   # (layer, cc)
         self.logq = []
         self.stats = {"cc": 0, "unmapped": 0, "sent": 0, "coalesced": 0,
-                      "unchanged": 0, "thru": 0, "logs_dropped": 0}
+                      "unchanged": 0, "thru": 0, "logs_dropped": 0,
+                      "layer": 0, "inactive": 0}
 
     # ---- logging ----------------------------------------------------------
     # Called from the MIDI callback, so it must not print. Lines are queued and
@@ -129,14 +140,59 @@ class Router:
             listen = self.cfg.listen_channel
             if listen is None or (status & 0x0F) + 1 == listen:
                 self.stats["cc"] += 1
-                mapping = self.cfg.lookup_cc(m[1])
+                if m[1] == self.cfg.layer_cc:
+                    self.handle_layer(m[2])
+                    return
+                mapping = self.cfg.lookup_cc(m[1], self.layer)
                 if mapping is not None:
                     self.handle_cc(m[1], m[2], mapping)
+                    return
+                # A knob mapped on some other layer is still one of this
+                # controller's knobs. It is consumed and stays silent rather than
+                # reaching the synth as a raw CC that would mean something else.
+                if m[1] in self.mapped_ccs:
+                    self.log_inactive(m[1], m[2])
                     return
                 self.log_unmapped(m[1], m[2])
 
         if self.thru:
             self.forward(m)
+
+    def handle_layer(self, cc_value):
+        """Pick the active layer from the layer knob's position.
+
+        The same region split and boundary dead zone as any other quantized
+        parameter, so a pot resting on an edge cannot flip between two layers.
+        Nothing is sent to the synth: the knobs now point at the wrong values for
+        the new layer, and resending from their stale positions would overwrite
+        the patch.  Each knob takes effect on its next move.
+        """
+        layer = alpha_juno.convert(self.layer_param, cc_value, "scale",
+                                   self.layer, self.layer_hysteresis)
+        if layer == self.layer:
+            return
+
+        self.layer = layer
+        self.stats["layer"] += 1
+        active = self.cfg.layers[layer]
+        self.note(LOG_NORMAL, "Received CC{} val {} -> layer {}, {} knob(s) mapped".format(
+            self.cfg.layer_cc, cc_value, active.label, len(active.by_cc)))
+
+    def log_inactive(self, cc, cc_value):
+        """Report, once per layer, a knob that does nothing on the current layer."""
+        self.stats["inactive"] += 1
+        seen = (self.layer, cc)
+        if seen in self.inactive_seen:
+            return
+        self.inactive_seen.add(seen)
+        others = []
+        for layer in self.cfg.layers:
+            if cc in layer.by_cc:
+                others.append(str(layer.number))
+        self.note(LOG_NORMAL,
+                  "Received CC{} val {} -> nothing on layer {} (mapped on layer {}), "
+                  "ignored".format(cc, cc_value, self.cfg.layers[self.layer].label,
+                                   "/".join(others)))
 
     def forward(self, m):
         """Send an untranslated message straight out, ahead of the sysex queue.
@@ -151,13 +207,15 @@ class Router:
 
     def log_unmapped(self, cc, cc_value):
         self.stats["unmapped"] += 1
-        if cc in self.unmapped_seen:
+        seen = (self.layer, cc)
+        if seen in self.unmapped_seen:
             return
-        self.unmapped_seen.add(cc)
+        self.unmapped_seen.add(seen)
         fate = "not mapped, passed through" if self.thru else "not mapped"
+        scope = " on this layer" if self.cfg.layering else ""
         self.note(LOG_NORMAL,
-                  "Received CC{} val {} -> {} (further CC{} messages will be silent)".format(
-                      cc, cc_value, fate, cc))
+                  "Received CC{} val {} -> {} (further CC{} messages{} will be "
+                  "silent)".format(cc, cc_value, fate, cc, scope))
 
     def handle_cc(self, cc, cc_value, mapping):
         param = mapping.param
@@ -246,6 +304,38 @@ def params():
         print(line)
 
 
+def layer_report(cfg):
+    """Describe each layer and the slice of the layer knob's travel that selects it."""
+    param = alpha_juno.make_layer_param(cfg.layer_count)
+    lines = ["Layer knob: CC{}, {} layers".format(cfg.layer_cc, cfg.layer_count)]
+    width = 0
+    for layer in cfg.layers:
+        width = max(width, len(layer.label))
+    for index in range(cfg.layer_count):
+        layer = cfg.layers[index]
+        low, high = alpha_juno.region_bounds(param, index)
+        marker = "->" if index == cfg.startup_layer - 1 else "  "
+        lines.append(" {} layer {}  CC {:>3}-{:<3}  {} knob(s)".format(
+            marker, layer.label + " " * (width - len(layer.label)),
+            low, high, len(layer.by_cc)))
+    lines.append("    Assuming layer {} until the knob is moved; its real position "
+                 "cannot be read.".format(cfg.layers[cfg.startup_layer - 1].label))
+    return lines
+
+
+def layers():
+    """Print the layer table of the running config."""
+    if _router is None:
+        print("cc2juno is not running.")
+        return
+    if not _router.cfg.layering:
+        print("This config has no layers.")
+        return
+    for line in layer_report(_router.cfg):
+        print(line)
+    print("Active now: layer {}".format(_router.cfg.layers[_router.layer].label))
+
+
 def status():
     """Print the running counters."""
     if _router is None:
@@ -255,6 +345,9 @@ def status():
     print("CC received: {}  (unmapped {}, unchanged {})".format(
         s["cc"], s["unmapped"], s["unchanged"]))
     print("Sysex sent:  {}  (coalesced away {})".format(s["sent"], s["coalesced"]))
+    if _router.cfg.layering:
+        print("Layer:       {} now, {} change(s), {} CC(s) idle on their layer".format(
+            _router.cfg.layers[_router.layer].label, s["layer"], s["inactive"]))
     if _router.thru:
         print("Passed thru: {}".format(s["thru"]))
     if s["logs_dropped"]:
@@ -300,11 +393,18 @@ def start(path=None, thru=None, log=None):
     print()
     print("cc2juno - CC to Alpha Juno sysex")
     print("Config:  {}".format(cfg.path))
-    summary = "{} of 36 parameters mapped".format(len(cfg.by_cc))
-    if cfg.disabled:
-        summary += " ({} switched off)".format(len(cfg.disabled))
+    if cfg.layering:
+        summary = "{} knob(s) mapped across {} layers".format(
+            len(cfg.all_mapped_ccs()), cfg.layer_count)
+    else:
+        summary = "{} of 36 parameters mapped".format(len(cfg.by_cc))
+        if cfg.disabled:
+            summary += " ({} switched off)".format(len(cfg.disabled))
     print("{}, rate limit {} msg/s".format(summary, cfg.max_msgs_per_sec))
     print("Listening on {}, sending to synth channel {}".format(listen, cfg.synth_channel))
+    if cfg.layering:
+        for line in layer_report(cfg):
+            print(line)
     if cfg.thru:
         print("Thru is ON: notes and unmapped CCs are forwarded to the output")
     print("Running. cc2juno.status() for counters, cc2juno.stop() to stop.")

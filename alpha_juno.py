@@ -134,6 +134,30 @@ def lookup(name) -> Optional[Parameter]:
     return _BY_NORMALIZED.get(normalize(name))
 
 
+MAX_LAYERS = 10
+
+
+def make_layer_param(count: int) -> Parameter:
+    """A stand-in Parameter for the layer-select knob.
+
+    Choosing a layer is the same job as any other low-granularity control -- cut
+    the 128 CC steps into `count` even regions -- so it borrows scale(),
+    convert() and the boundary hysteresis rather than growing a second copy of
+    that arithmetic.  The index is -1 because a layer is never sent to the
+    synth; build_sysex() would refuse it.
+    """
+    if not 1 <= count <= MAX_LAYERS:
+        raise ValueError(f"layer count must be 1-{MAX_LAYERS}, got {count}")
+    return Parameter(-1, "Layer", count - 1)
+
+
+def region_bounds(param: Parameter, value: int) -> Tuple[int, int]:
+    """Lowest and highest CC value that land in the region for `value`."""
+    low = region_start(param, value) if value > 0 else 0
+    high = region_start(param, value + 1) - 1 if value < param.max_value else CC_RANGE - 1
+    return low, high
+
+
 def region_start(param: Parameter, value: int) -> int:
     """Lowest CC value that maps into the region for `value` (ceil division)."""
     return (value * CC_RANGE + param.max_value) // param.region_count
