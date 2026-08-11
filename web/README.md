@@ -152,3 +152,14 @@ Python implementation and compare: every `scale()` and `convert()` answer for
 every parameter across all 128 CC values and both modes, the shipped config read
 both ways, and a file written here parsed back by `config.py`. Without `python3`
 those sections are skipped and the rest still runs.
+
+
+## TODO / Ideas: 
+
+1. PG-300 style performance UI mode, all preconfigured. Will provide example PG-300 images, possibly vector art
+2. Integrated Patch Library Manager with some included patch collections
+  - Perhaps this would just be lists/categories of patches instantly auditioned, without messing around with the synth's internal preset memory slots. 
+3. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
+4. Printable template art to go around generic midi CC hardware box. Will need knob spacing information. 
+5. When the user changes patches on the synth, sysex is emitted which contains the current settings for each knob. We should apply these to the UI when we have the data available, especially for the PG-300 display. 
+6. Change "input" and "output" midi labels to "Controller" and "Synth", respectivly. 
