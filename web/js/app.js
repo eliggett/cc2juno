@@ -11,6 +11,7 @@ import * as cfgmod from './config.js';
 import { MidiPorts, decode, describe } from './midi.js';
 import { Router } from './router.js';
 import { Knob } from './knob.js';
+import { Pg300Panel } from './pg300.js';
 import { MoveDetector, LEARN_MOVE_THRESHOLD } from './learn.js';
 
 const STORE_KEY = 'cc2juno.web.config';
@@ -22,6 +23,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   cfg: cfgmod.makeConfig(),
   mode: 'config',
+  view: 'grid',           // 'grid' or 'pg300', and only while performing
   editLayer: 0,           // the layer being edited, which Perform ignores
   selected: null,         // index into layout.ccs, or null
   learning: null,         // index of the cell being learned, or null
@@ -36,11 +38,12 @@ const router = new Router(state.cfg, {
   send: (bytes) => ports.send(bytes),
   log: (entry) => logEntry(entry),
   onKnob: (event) => onKnobActivity(event),
-  onSent: () => { if (state.mode === 'perform') refreshKnobs(); },
+  onSent: () => { if (state.mode === 'perform') refreshStage(); },
   onLayer: () => { refresh(); },
 });
 
 let knobs = [];
+let panel = null;         // the PG-300, built the first time it is asked for
 const seenUnmapped = new Set();   // `${layer}:${cc}`, so each is reported once
 const seenInactive = new Set();
 
@@ -60,6 +63,11 @@ function cellOf(cc) {
 
 function isLayerCc(cc) {
   return cfgmod.isLayered(state.cfg) && cc === state.cfg.layerCc;
+}
+
+/** True when the stage is showing the PG-300 rather than the knob grid. */
+function showingPanel() {
+  return state.mode === 'perform' && state.view === 'pg300';
 }
 
 /**
@@ -127,6 +135,7 @@ function save() {
         inputName: state.inputName,
         outputName: state.outputName,
         mode: state.mode,
+        view: state.view,
         editLayer: state.editLayer,
       }));
     } catch (exc) {
@@ -150,6 +159,7 @@ function restore() {
     state.outputName = stored.outputName || null;
     state.editLayer = Math.min(stored.editLayer || 0, state.cfg.layers.length - 1);
     state.mode = stored.mode === 'perform' ? 'perform' : 'config';
+    state.view = stored.view === 'pg300' ? 'pg300' : 'grid';
     router.setConfig(state.cfg);
     return true;
   } catch (exc) {
@@ -399,13 +409,18 @@ function refreshKnobs() {
 }
 
 function onKnobActivity({ cc }) {
-  const cell = cellOf(cc);
-  if (cell !== -1 && knobs[cell]) knobs[cell].flash();
-  // Only the numbers move, so the whole grid does not need rebuilding; but the
-  // layer knob changes what every other knob says, and the summary names the
+  if (showingPanel()) {
+    const mapping = state.cfg.layers[router.layer].byCc.get(cc);
+    if (mapping && panel) panel.flash(mapping.paramIndex);
+  } else {
+    const cell = cellOf(cc);
+    if (cell !== -1 && knobs[cell]) knobs[cell].flash();
+  }
+  // Only the numbers move, so the whole stage does not need rebuilding; but the
+  // layer knob changes what every other control says, and the summary names the
   // layer, so that one case redraws properly.
   if (isLayerCc(cc)) refresh();
-  else refreshKnobs();
+  else refreshStage();
 }
 
 /** A knob dragged on screen behaves exactly like the same CC arriving. */
@@ -413,6 +428,93 @@ function onLocalKnob(cell, value) {
   const cc = state.cfg.layout.ccs[cell];
   if (cc === null || state.mode !== 'perform') return;
   router.handleLocalCc(cc, value);
+}
+
+// ------------------------------------------------------------ PG-300 panel ---
+
+/**
+ * What each of the 36 sliders should show.
+ *
+ * The grid draws the controller, so a knob there shows where its pot is sitting.
+ * The panel draws the synth, so a slider here shows the value the parameter has
+ * been set to -- which is the same rule the grid follows for its numbers,
+ * applied to the thing the panel is a picture of. A parameter that has
+ * never been sent has no position at all: the synth's patch cannot be read back,
+ * so the slider says so rather than sitting at zero and implying otherwise.
+ */
+function panelReadings() {
+  const layer = state.cfg.layers[router.layer];
+
+  const here = new Map();
+  for (const [cc, mapping] of layer.byCc) here.set(mapping.paramIndex, cc);
+
+  const elsewhere = new Set();
+  for (const other of state.cfg.layers) {
+    if (other === layer) continue;
+    for (const mapping of other.byCc.values()) elsewhere.add(mapping.paramIndex);
+  }
+
+  return aj.PARAMETERS.map((param) => {
+    const cc = here.has(param.index) ? here.get(param.index) : null;
+    // A value still in the queue counts: the only thing that can stop it going
+    // out is a newer value for the same parameter, which is what would be shown
+    // instead. Reading lastValue alone would drag a slider back to where it was
+    // for the few milliseconds the rate limiter holds the move -- and every
+    // further nudge would then start again from the old value.
+    const queued = router.pending.get(param.index);
+    const sent = queued ? queued.value : router.lastValue.get(param.index);
+    return {
+      value: sent === undefined ? null : sent,
+      cc,
+      reach: cc !== null ? 'layer' : (elsewhere.has(param.index) ? 'other' : 'none'),
+    };
+  });
+}
+
+/**
+ * A slider moved on the panel.
+ *
+ * Where a knob on this layer reaches the same parameter, the move is fed in as
+ * that knob's CC rather than sent directly: one path to the synth means the two
+ * views cannot end up disagreeing about where the knob is, and the value comes
+ * back out of the scaling unchanged because ccForValue aims at the middle of the
+ * region. Everything else -- most of the panel, most of the time -- has no knob
+ * behind it and is sent as itself.
+ */
+function onPanelInput(paramIndex, value) {
+  if (state.mode !== 'perform') return;
+  const param = aj.PARAMETERS[paramIndex];
+  for (const [cc, mapping] of state.cfg.layers[router.layer].byCc) {
+    if (mapping.paramIndex !== paramIndex) continue;
+    // Clamp scaling takes the CC value literally, so for those the CC that
+    // produces this value is the value.
+    router.handleLocalCc(cc, mapping.mode === 'clamp'
+      ? Math.min(127, value)
+      : aj.ccForValue(param, value));
+    return;
+  }
+  router.sendParam(paramIndex, value);
+}
+
+function refreshPanel() {
+  if (!panel) {
+    panel = new Pg300Panel({ onInput: onPanelInput });
+    $('pg300-host').append(panel.el);
+  }
+  panel.update(panelReadings());
+}
+
+/** Redraw whichever of the two views the stage is showing. */
+function refreshStage() {
+  if (showingPanel()) refreshPanel();
+  else refreshKnobs();
+}
+
+function setView(view) {
+  if (view === state.view) return;
+  state.view = view;
+  save();
+  refresh();
 }
 
 // ------------------------------------------------------------------ layers ---
@@ -876,9 +978,16 @@ function logEntry(entry) {
               + `(further CC${entry.cc} messages${scope} will be silent)`, 'unmapped');
       break;
     }
+    case 'panel': {
+      logLine(`panel    ${pad('', 9)}-> sending `
+              + `${entry.param.name} = ${aj.label(entry.param, entry.value)}`, 'mapped');
+      break;
+    }
     case 'sysex': {
       if (!state.verbose) break;
-      const param = cfgmod.paramFor(entry.mapping);
+      // A message from the panel has no mapping behind it and carries its
+      // parameter instead.
+      const param = entry.mapping ? cfgmod.paramFor(entry.mapping) : entry.param;
       logLine(`    sent: ${entry.hex}   (${param.name} = ${entry.value})`, 'sysex');
       break;
     }
@@ -1107,8 +1216,21 @@ function setMode(mode) {
 }
 
 function refresh() {
-  buildGrid();
-  refreshKnobs();
+  const panelView = showingPanel();
+  $('view-switch').hidden = state.mode !== 'perform';
+  $('view-grid').classList.toggle('is-active', !panelView);
+  $('view-pg300').classList.toggle('is-active', panelView);
+  $('pg300-host').hidden = !panelView;
+
+  if (panelView) {
+    // buildGrid owns these two normally, and it is not running.
+    $('grid').hidden = true;
+    $('grid-empty').hidden = true;
+    refreshPanel();
+  } else {
+    buildGrid();
+    refreshKnobs();
+  }
   renderLayerBar();
   renderStageNote();
   renderInspector();
@@ -1161,6 +1283,8 @@ function wire() {
 
   $('mode-config').addEventListener('click', () => setMode('config'));
   $('mode-perform').addEventListener('click', () => setMode('perform'));
+  $('view-grid').addEventListener('click', () => setView('grid'));
+  $('view-pg300').addEventListener('click', () => setView('pg300'));
 
   $('do-import').addEventListener('click', () => $('file-input').click());
   $('file-input').addEventListener('change', async (event) => {

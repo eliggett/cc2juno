@@ -90,6 +90,38 @@ the wrong thing:
   layer *it* is showing — one knob then appears to change two parameters, one of
   which belongs to a layer you are not on. The tabs notice each other and say so.
 
+## The PG-300 view
+
+Perform mode has two views of the same running mapping, switched above the grid.
+
+The **knob grid** is a picture of your controller: the knobs you own, where you
+put them, saying what each one does. The **PG-300** is a picture of the synth:
+all 36 parameters, always, laid out the way Roland laid them out on the hardware
+programmer, down to which sliders are short because the parameter only has four
+positions. Nothing on it is assignable — that is the point of it.
+
+Sliders light up as the CCs mapped to them arrive. Which ones are lit says what
+your hands can reach:
+
+- **Bright, with an amber cap line** — a knob on the current layer moves this.
+- **Mid grey** — mapped, but on one of the other layers.
+- **Dim** — nothing on the controller reaches it.
+
+A slider with a **faded cap parked at the bottom** has not been set this session.
+That is not the same as being at zero: the synth's patch cannot be read back, so
+the panel says it does not know rather than drawing a value nobody sent. It fills
+in as the parameter is used.
+
+Every slider can be moved on screen, mapped or not — drag it, roll the wheel over
+it, or use the arrow keys, **Home** and **End** when one has focus, with
+**shift** for fine control. Where a knob on this layer reaches the same
+parameter, the move is fed in as that knob's CC so the two views cannot disagree
+about it; the other thirty-odd sliders are sent directly. Either way it goes into
+the same rate-limited queue, and the log names it.
+
+The empty area at the top right is the one Roland put their logo in. Ours is a
+placeholder: replace the contents of `#pg300-logo` in `js/pg300.js`.
+
 ## Import and export
 
 **Export** writes `cc2juno.yaml`, the same fully commented file `--init-config`
@@ -126,7 +158,7 @@ does not throw the grid away; the Tulip build skips it.
 
 | File | Role |
 | --- | --- |
-| `index.html` | The page: top bar, knob grid, and the two side panels |
+| `index.html` | The page: top bar, stage, and the two side panels |
 | `about.html` | The words in the About box, and where a logo goes. Plain HTML, meant to be edited |
 | `css/app.css` | The whole dark theme |
 | `js/app.js` | Modes, panels, import/export, autosave, and the wiring between them |
@@ -136,6 +168,7 @@ does not throw the grid away; the Tulip build skips it.
 | `js/router.js` | Mapping state, layer state, rate limiter, thru |
 | `js/midi.js` | Web MIDI access, port selection, message decoding |
 | `js/knob.js` | One knob: the SVG dial and its pointer handling |
+| `js/pg300.js` | The PG-300 panel: its geometry, and one slider's behaviour |
 | `js/learn.js` | Deciding when a control has really been moved |
 | `test_web.mjs` | Tests — run `node test_web.mjs` |
 | `server/` | The development HTTPS server |
@@ -156,10 +189,11 @@ those sections are skipped and the rest still runs.
 
 ## TODO / Ideas: 
 
-1. PG-300 style performance UI mode, all preconfigured. Will provide example PG-300 images, possibly vector art
-2. Integrated Patch Library Manager with some included patch collections
+1. Integrated Patch Library Manager with some included patch collections
   - Perhaps this would just be lists/categories of patches instantly auditioned, without messing around with the synth's internal preset memory slots. 
-3. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
-4. Printable template art to go around generic midi CC hardware box. Will need knob spacing information. 
-5. When the user changes patches on the synth, sysex is emitted which contains the current settings for each knob. We should apply these to the UI when we have the data available, especially for the PG-300 display. 
-6. Change "input" and "output" midi labels to "Controller" and "Synth", respectivly. 
+2. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
+3. Printable template art to go around generic midi CC hardware box. Will need knob spacing information. 
+4. When the user changes patches on the synth, sysex is emitted from the synth, which contains the current settings for each knob. We should apply these to the UI when we have the data available, especially for the PG-300 display. 
+5. Change "input" and "output" midi labels to "Controller" and "Synth", respectivly. 
+6. Drop down menu to select that all controller UI elements are vertical sliders, horizontal sliders, or knobs. Does not alter PG-300 appearance at all. 
+7. Support for CC buttons and delta-encoders. Maybe buttons for layers? 

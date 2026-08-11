@@ -127,10 +127,32 @@ export class Router {
       return;
     }
 
-    this.pending.set(param.index, { value, mapping });
+    this.pending.set(param.index, { value, mapping, param });
     this.sentOnLayer.add(cc);
     this.report(cc, ccValue, 'mapped', { mapping, value });
     this.schedule();
+  }
+
+  /**
+   * Set a parameter with no CC behind it, as the on-screen panel does.
+   *
+   * Every other route into the queue starts with a knob, so it can name the
+   * mapping that got it there; this one cannot, and carries the parameter
+   * instead. It joins the same queue under the same rate limit and the same
+   * don't-resend-an-unchanged-value rule, so a slider swept with the mouse costs
+   * the synth no more than a knob swept with a hand.
+   */
+  sendParam(paramIndex, value) {
+    const param = aj.PARAMETERS[paramIndex];
+    if (!param) throw new Error(`no such parameter: ${paramIndex}`);
+    const bounded = Math.max(0, Math.min(param.maxValue, Math.trunc(value)));
+    const previous = this.lastValue.has(paramIndex) ? this.lastValue.get(paramIndex) : null;
+    if (bounded === previous) return false;
+
+    this.pending.set(paramIndex, { value: bounded, mapping: null, param });
+    if (this.hooks.log) this.hooks.log({ kind: 'panel', param, value: bounded });
+    this.schedule();
+    return true;
   }
 
   /**
@@ -165,7 +187,7 @@ export class Router {
       return;
     }
 
-    const [index, { value, mapping }] = this.pending.entries().next().value;
+    const [index, { value, mapping, param }] = this.pending.entries().next().value;
     this.pending.delete(index);
 
     const frame = aj.buildSysex(index, value, this.cfg.synthChannel,
@@ -175,12 +197,12 @@ export class Router {
     this.lastSend = now;
 
     if (this.hooks.log) {
-      this.hooks.log({ kind: 'sysex', frame, mapping, value, hex: aj.hexString(frame) });
+      this.hooks.log({ kind: 'sysex', frame, mapping, param, value, hex: aj.hexString(frame) });
     }
     // The value on screen is the value that was actually sent, and that is only
     // known here -- a message can sit in the queue for a while, and the last one
     // of a sweep would otherwise never be drawn at all.
-    if (this.hooks.onSent) this.hooks.onSent({ mapping, value });
+    if (this.hooks.onSent) this.hooks.onSent({ mapping, param, value });
     this.schedule();
   }
 

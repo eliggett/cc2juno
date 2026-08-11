@@ -45,6 +45,12 @@
   <section class="stage">
     <div class="stage-head">
       <div id="layer-bar" class="layer-bar"></div>
+      <!-- Perform only: the same running mapping, seen from the controller's
+           side or the synth's. -->
+      <div id="view-switch" class="view-switch" role="tablist" aria-label="View" hidden>
+        <button id="view-grid" role="tab" class="is-active">Knob grid</button>
+        <button id="view-pg300" role="tab">PG-300</button>
+      </div>
       <div id="stage-note" class="stage-note"></div>
     </div>
     <div id="grid" class="grid"></div>
@@ -52,6 +58,8 @@
       No knobs yet. Set the grid size, then click a cell and press <b>Learn</b>
       while moving the control you want there.
     </p>
+    <!-- The PG-300 panel is built by js/pg300.js the first time it is shown. -->
+    <div id="pg300-host" hidden></div>
   </section>
 
   <aside class="side">

@@ -262,6 +262,150 @@ main {
   padding: 18px;
 }
 
+/* --------------------------------------------------------- view switch --- */
+
+.view-switch { display: flex; gap: 6px; align-items: center; }
+.view-switch button {
+  border-radius: 999px;
+  padding: 4px 13px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.view-switch button.is-active {
+  border-color: var(--accent-dim);
+  background: #241a09;
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------- PG-300 panel --- */
+
+/* A hardware panel rather than a web page: the face is the grey Roland used,
+ * not the app's own background, and it keeps its proportions at any width. The
+ * lower bound stops the sliders from becoming too small to grab on a narrow
+ * window -- below that the stage scrolls sideways, which is the lesser evil. */
+.pg300 {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 620px;
+  max-width: 1080px;
+}
+
+.pg300-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  touch-action: none;      /* dragging a slider must not scroll the page */
+}
+
+.pg300-face { fill: #3a4247; stroke: #10141600; }
+.pg300-sections {
+  fill: none;
+  stroke: #8b979e;
+  stroke-width: 0.9;
+  stroke-opacity: 0.55;
+}
+
+/* Compacta, which the panel is set in, is nobody's system font. The nearest
+ * widely present thing is a condensed grotesque; where there is none the stack
+ * falls back to the app's own sans and the panel simply reads a little wider. */
+.pg300-svg text {
+  font-family: "Oswald", "Archivo Narrow", "Arial Narrow", "Liberation Sans Narrow",
+               "Helvetica Neue", var(--sans);
+  font-stretch: condensed;
+  font-weight: 700;
+  fill: #eef3f5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pg300-section { font-size: 13px; letter-spacing: 0.6px; }
+.pg300-label { font-size: 6.8px; letter-spacing: 0.2px; }
+.pg300-tick {
+  font-size: 4.2px;
+  font-weight: 400;
+  fill: #aeb9bf;
+}
+
+.pg300-wordmark { font-size: 26px; letter-spacing: 1px; fill: #dde5e9; }
+.pg300-wordmark-sub {
+  font-size: 6.5px;
+  font-weight: 400;
+  letter-spacing: 2.4px;
+  fill: #8b979e;
+}
+
+.pg300-rungs line {
+  stroke: #262c30;
+  stroke-width: 0.7;
+  stroke-opacity: 0.75;
+}
+
+.pg300-track {
+  fill: #1a1f22;
+  stroke: #10161a;
+  stroke-width: 0.6;
+}
+
+.pg300-cap rect {
+  fill: #79848b;
+  stroke: #232a2e;
+  stroke-width: 0.5;
+}
+.pg300-cap-line { stroke: #d8dfe3; stroke-width: 1.1; }
+
+.pg300-hit { fill: transparent; cursor: ns-resize; }
+.pg300-reading {
+  font-size: 5.4px;
+  font-weight: 400;
+  fill: var(--accent);
+  opacity: 0;
+}
+
+/* Which sliders your hands can actually reach. Amber is the value colour
+ * everywhere else in this app, so it means the same thing here: this one is
+ * live on this layer. The rest still work under the mouse, they are just not
+ * on the controller. */
+.pg300-slider.reach-layer .pg300-cap-line { stroke: var(--accent); }
+.pg300-slider.reach-layer .pg300-cap rect { fill: #98a4ab; }
+.pg300-slider.reach-layer .pg300-label { fill: #ffffff; }
+.pg300-slider.reach-other .pg300-cap rect { fill: #626d74; }
+.pg300-slider.reach-other .pg300-label,
+.pg300-slider.reach-none .pg300-label { fill: #c3ccd1; }
+.pg300-slider.reach-none .pg300-cap rect { fill: #545e64; }
+.pg300-slider.reach-none .pg300-cap-line { stroke: #99a3a9; }
+
+/* Never sent this session, so the cap is parked at the bottom without claiming
+ * that the parameter is at zero. Hollow rather than dimmed: dimming would fight
+ * the lit/unlit signal above, and a bright cap at 45% looks much like a dull one
+ * at full strength. The cap line keeps its colour, so a slider can say "your
+ * hands reach this, and I do not know where it is" -- which is the usual state
+ * of the panel at the start of a session. */
+.pg300-slider.is-unknown .pg300-cap rect { fill: #333b40; stroke: #6d777d; }
+.pg300-slider.is-unknown .pg300-cap-line { opacity: 0.5; }
+
+.pg300-slider:hover .pg300-reading,
+.pg300-slider:focus .pg300-reading,
+.pg300-slider.is-active .pg300-reading { opacity: 1; }
+
+.pg300-slider:hover .pg300-cap rect { stroke: var(--accent); }
+.pg300-slider:focus { outline: none; }
+.pg300-slider:focus .pg300-cap rect {
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.pg300-slider.is-active .pg300-cap rect { fill: var(--accent); }
+.pg300-slider.is-active .pg300-cap-line { stroke: #211505; }
+
+.pg300-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+  min-height: 1.4em;
+}
+.pg300-hint.is-reading { color: var(--accent); font-family: var(--mono); }
+
 /* ----------------------------------------------------------------- knob --- */
 
 .knob {

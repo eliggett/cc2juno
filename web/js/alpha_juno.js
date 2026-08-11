@@ -145,6 +145,24 @@ export function regionBounds(p, value) {
 }
 
 /**
+ * A CC value that converts back to `value`: the middle of its region.
+ *
+ * The inverse of scale(), used when something on screen is moved in parameter
+ * units and has to be fed back in as though a knob had produced it. The middle
+ * rather than the edge, so that the boundary dead zone in convert() cannot
+ * bounce the answer into the neighbouring region.
+ *
+ * There is no counterpart in alpha_juno.py: only the browser build has controls
+ * you can move with a mouse.
+ */
+export function ccForValue(p, value) {
+  const bounded = Math.max(0, Math.min(p.maxValue, Math.trunc(value)));
+  if (isContinuous(p)) return bounded;
+  const [low, high] = regionBounds(p, bounded);
+  return Math.round((low + high) / 2);
+}
+
+/**
  * Map a 0..127 CC value onto 0..maxValue by splitting 128 into equal regions.
  *
  * For a 4-option parameter this gives 0-31 -> 0, 32-63 -> 1, 64-95 -> 2, 96-127 -> 3.

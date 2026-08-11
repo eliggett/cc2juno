@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import * as aj from './js/alpha_juno.js';
 import * as cfgmod from './js/config.js';
 import { Router } from './js/router.js';
+import * as pg from './js/pg300.js';
 import { parse as parseYaml, YamlError } from './js/yaml.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -536,6 +537,91 @@ check('the layer knob is never sent to the synth as a parameter', () => {
   for (const value of [0, 40, 80, 127]) cc(5, value);
   equal(drain(), []);
   equal(router.layer, 1);
+});
+
+check('a parameter set from the panel is sent with no CC behind it', () => {
+  const { router, drain } = makeRouter();
+  assert(router.sendParam(aj.lookup('VCF Cutoff').index, 90), 'should have queued');
+  equal(drain(), ['VCF Cutoff=90']);
+  assert(!router.sendParam(aj.lookup('VCF Cutoff').index, 90),
+         'the same value again is not worth a message');
+  equal(drain(), []);
+});
+
+check('a panel sweep collapses under the rate limit like a knob sweep', () => {
+  const { router, drain } = makeRouter();
+  const level = aj.lookup('VCA Level').index;
+  for (let value = 0; value <= 127; value += 1) router.sendParam(level, value);
+  equal(drain(), ['VCA Level=127'], 'only the newest value per parameter survives');
+});
+
+check('the panel cannot send a parameter past its range', () => {
+  const { router, drain } = makeRouter();
+  router.sendParam(aj.lookup('DCO Range').index, 99);
+  equal(drain(), ['DCO Range=3'], 'a 4-position parameter tops out at 3');
+  throwsWith(() => router.sendParam(36, 0), 'no such parameter');
+});
+
+// ------------------------------------------------------------- PG-300 view ---
+
+check('every parameter is on the panel exactly once', () => {
+  equal(pg.LAYOUT.length, aj.PARAMETERS.length);
+  const seen = pg.LAYOUT.map((entry) => entry.param).sort((a, b) => a - b);
+  equal(seen, aj.PARAMETERS.map((param) => param.index),
+        'the panel must cover the tone table and nothing else');
+});
+
+check('the panel artwork agrees with the parameter table about granularity', () => {
+  // Slider length is taken off the drawing, not worked out from the table, so
+  // this is a real check: Roland gave the switch-like parameters short travel
+  // and the 0..127 ones the full 63.78. If the two ever disagree, one of them
+  // has been mistyped.
+  for (const entry of pg.LAYOUT) {
+    const param = aj.PARAMETERS[entry.param];
+    const wants = param.maxValue >= 5 ? 'full' : (param.maxValue <= 1 ? 'stub' : 'half');
+    const drawn = entry.len > 60 ? 'full' : (entry.len < 25 ? 'stub' : 'half');
+    equal(drawn, wants, `${param.name}: a ${entry.len.toFixed(0)}-unit slider `
+                        + `for a 0..${param.maxValue} parameter`);
+  }
+});
+
+check('the panel stays inside its own frame', () => {
+  // Room for the widest thing hung off a slider: the scale numerals down its
+  // left, and the value readout under its bottom end.
+  const { x, y, width, height } = pg.PANEL;
+  for (const entry of pg.LAYOUT) {
+    assert(entry.cx - 14 > x && entry.cx + 8 < x + width,
+           `${entry.param}: x off the panel`);
+    assert(entry.top - 8 > y && entry.top + entry.len + 10 < y + height,
+           `${entry.param}: y off the panel`);
+    if (entry.ticks === 'unit') continue;
+    equal(entry.ticks.length, aj.PARAMETERS[entry.param].maxValue + 1,
+          `${aj.PARAMETERS[entry.param].name}: one scale mark per step`);
+  }
+});
+
+check('a slider draws where the value sits in its own range', () => {
+  const cutoff = aj.lookup('VCF Cutoff');
+  equal(pg.fractionOf(cutoff, 0), 0);
+  equal(pg.fractionOf(cutoff, 127), 1);
+  equal(pg.fractionOf(cutoff, null), 0, 'never sent has to be drawn somewhere');
+  // A 4-position switch uses its whole travel, not the first 4/128 of it.
+  equal(pg.fractionOf(aj.lookup('DCO Range'), 3), 1);
+  equal(pg.fractionOf(aj.lookup('Chorus Switch'), 1), 1);
+});
+
+check('a slider moved on screen survives the trip through a knob', () => {
+  // The panel feeds a move back in as the CC of any knob that reaches the same
+  // parameter, so that the two views cannot disagree about where that knob is.
+  // The value has to come back out unchanged, or dragging a slider would land
+  // on a neighbouring value.
+  for (const param of aj.PARAMETERS) {
+    for (let value = 0; value <= param.maxValue; value += 1) {
+      const cc = aj.ccForValue(param, value);
+      equal(aj.convert(param, cc, { previous: value === 0 ? 1 : value - 1, hysteresis: 4 }),
+            value, `${param.name} = ${value} came back as something else`);
+    }
+  }
 });
 
 // ------------------------------------------------------------------- done ---
