@@ -1,0 +1,76 @@
+<!--
+  The About box.
+
+  This is the one file here meant to be edited without knowing any JavaScript.
+  It is a plain fragment of HTML - no <html> or <body> wrapper - loaded into the
+  dialog when the About button is pressed. Change the words, save, reload the
+  page. Only two things to know:
+
+    <p>...</p>   is a paragraph
+    <a href="https://example.com">the words you click</a>   is a link
+
+  Links open in a new tab on their own; there is no need to add anything.
+-->
+
+<!--
+  LOGO GOES HERE.
+
+  Drop the image file in this folder, then delete the two comment markers around
+  the line below (the "<!- -" before it and the "- ->" after it) and change the
+  file name to match. Anything up to about 320 pixels wide looks right; a PNG
+  with a transparent background suits the dark theme best.
+
+  <img class="about-logo" src="logo.png" alt="cc2juno">
+-->
+
+<h2>cc2juno</h2>
+
+<p class="about-lead">
+  Turns the knobs on an ordinary MIDI controller into real-time edits for a
+  Roland Alpha Juno 1, Alpha Juno 2 or MKS-50.
+</p>
+
+<p>
+  Those synths have no knobs to speak of, and they do not respond to ordinary MIDI
+  CC messages either. Everything on the front panel is reached by paging through a
+  menu, and the only way in from outside is system exclusive. Roland sold the
+  PG-300 programmer to solve that. This does the same job with whatever CC
+  controller you already own: it listens for the CCs your knobs send, converts
+  each one into the sysex message for the tone parameter you assigned it, and
+  passes anything it does not recognise straight through.
+</p>
+
+<p>
+  All 36 tone parameters are available. A controller with fewer knobs than that
+  can give one knob up to choosing a <em>layer</em>, which swaps what every other
+  knob does — so eight knobs and a layer selector can still reach the whole synth.
+</p>
+
+<p>
+  Configurations are ordinary text files. The one this page exports is the same
+  file used by the command-line version and by the build for the Tulip Creative
+  Computer, so a mapping worked out here will run on a Raspberry Pi with no
+  screen attached, and one worked out there opens here.
+</p>
+
+<h3>Getting sound out of it</h3>
+
+<p>
+  Two things must be set on the synth itself, and nothing works until they are:
+  <strong>sysex receive must be ON</strong> (under the MIDI button on an Alpha
+  Juno), and the synth's basic channel must match the synth channel set on this
+  page.
+</p>
+
+<h3>More</h3>
+
+<p>
+  <a href="https://github.com/eliggett/cc2juno">github.com/eliggett/cc2juno</a>
+  — source, the command-line and Tulip versions, and the full documentation.
+</p>
+
+<p class="about-fine">
+  Free software under the GNU General Public License. Roland, Alpha Juno, MKS-50
+  and PG-300 are trademarks of Roland Corporation, which has nothing to do with
+  this program.
+</p>

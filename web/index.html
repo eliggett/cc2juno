@@ -11,6 +11,7 @@
 <header class="topbar">
   <div class="brand">
     <strong>cc2juno</strong>
+    <button id="about-open" class="quiet small">About</button>
     <span>MIDI CC &rarr; Alpha Juno sysex</span>
   </div>
 
@@ -219,6 +220,15 @@
 
   </aside>
 </main>
+
+<!-- The words in here live in about.html, which is loaded the first time the
+     About button is pressed. Edit that file, not this one. -->
+<dialog id="about" class="about">
+  <div id="about-body" class="about-body"></div>
+  <div class="about-actions">
+    <button id="about-close" class="primary">Close</button>
+  </div>
+</dialog>
 
 <script type="module" src="js/app.js"></script>
 </body>

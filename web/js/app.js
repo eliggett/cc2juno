@@ -993,6 +993,47 @@ function exportConfig() {
                + 'command-line and Tulip versions.');
 }
 
+// ----------------------------------------------------------------- about ---
+
+/**
+ * The About box, whose text lives in about.html.
+ *
+ * It is kept in its own file, and in HTML rather than in a string in here, so it
+ * can be edited by someone who does not want to read JavaScript to find the
+ * words. It is fetched once, on first use, rather than being part of the page:
+ * nobody should pay for it on load, and it is the one part of this that is
+ * allowed to be slow.
+ */
+let aboutLoaded = false;
+
+async function openAbout() {
+  const dialog = $('about');
+  if (!aboutLoaded) {
+    try {
+      const response = await fetch('about.html', { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      // Our own file from our own origin, so this is not the usual injection
+      // hazard -- and it has to be markup, or the links in it would not work.
+      $('about-body').innerHTML = await response.text();
+      for (const link of $('about-body').querySelectorAll('a[href]')) {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+      aboutLoaded = true;
+    } catch (exc) {
+      // Opening index.html straight off the disk rather than through a server
+      // is the usual reason; fetch is not allowed to read file:// URLs.
+      $('about-body').innerHTML = '<h2>cc2juno</h2>';
+      const note = document.createElement('p');
+      note.textContent = `about.html could not be loaded (${exc.message}). `
+        + 'The page needs to be served over http or https, which is also what '
+        + 'Web MIDI requires.';
+      $('about-body').append(note);
+    }
+  }
+  dialog.showModal();
+}
+
 // ------------------------------------------------------------- other tabs ---
 
 // Web MIDI hands the same input to every page that asked for it, so a second
@@ -1098,6 +1139,18 @@ function numberField(id, apply, { min, max, allowBlank = false, blankValue = nul
 }
 
 function wire() {
+  $('about-open').addEventListener('click', openAbout);
+  $('about-close').addEventListener('click', () => $('about').close());
+  // Clicking the backdrop closes it. The dialog element itself fills the whole
+  // viewport as far as the event is concerned, so the check is whether the click
+  // landed outside the box the user can actually see.
+  $('about').addEventListener('click', (event) => {
+    const box = $('about').getBoundingClientRect();
+    const outside = event.clientX < box.left || event.clientX > box.right
+                 || event.clientY < box.top || event.clientY > box.bottom;
+    if (outside) $('about').close();
+  });
+
   $('midi-enable').addEventListener('click', enableMidi);
   $('midi-in').addEventListener('change', (event) => {
     chooseInput(ports.inputs().find((port) => port.id === event.target.value) || null);

@@ -127,6 +127,7 @@ does not throw the grid away; the Tulip build skips it.
 | File | Role |
 | --- | --- |
 | `index.html` | The page: top bar, knob grid, and the two side panels |
+| `about.html` | The words in the About box, and where a logo goes. Plain HTML, meant to be edited |
 | `css/app.css` | The whole dark theme |
 | `js/app.js` | Modes, panels, import/export, autosave, and the wiring between them |
 | `js/alpha_juno.js` | The 36-parameter table, value scaling, sysex framing |
