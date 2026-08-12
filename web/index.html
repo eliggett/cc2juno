@@ -254,7 +254,9 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
 <dialog id="about" class="about">
   <div id="about-body" class="about-body"></div>
   <div class="about-actions">
-    <button id="about-close" class="primary">Close</button>
+    <!-- autofocus so that opening the box does not focus the first link in the
+         text and scroll it into view. See openAbout(). -->
+    <button id="about-close" class="primary" autofocus>Close</button>
   </div>
 </dialog>
 

@@ -1332,6 +1332,12 @@ async function openAbout() {
     }
   }
   dialog.showModal();
+  // Back to the top, every time. The words stay in the page between openings, so
+  // a second look would otherwise resume wherever the last one was left; and
+  // opening a dialog focuses something inside it, which the browser then scrolls
+  // into view -- with no say in the matter that lands on the first link, halfway
+  // down. The Close button carries the autofocus for that reason.
+  $('about-body').scrollTop = 0;
 }
 
 // ------------------------------------------------------------- other tabs ---
