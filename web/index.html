@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cc2juno</title>
+<!-- The tab icon. Browsers pick from these by what they are drawing: the .ico
+     for the small favicon, the 180 for an iOS home screen, the 192 and 512 for
+     Android and for anywhere a large one is wanted. -->
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="icon-512x512.png" type="image/png" sizes="512x512">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -31,8 +39,8 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
   </div>
 
   <div class="modes" role="tablist" aria-label="Mode">
-    <button id="mode-config" role="tab" class="is-active">Configure</button>
-    <button id="mode-perform" role="tab">Perform</button>
+    <button id="mode-config" role="tab">Configure</button>
+    <button id="mode-perform" role="tab" class="is-active">Perform</button>
   </div>
 
   <div class="files">
@@ -51,28 +59,30 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
       <div id="layer-bar" class="layer-bar"></div>
       <!-- Perform only: the same running mapping, seen from the controller's
            side or the synth's. -->
-      <div id="view-switch" class="view-switch" role="tablist" aria-label="View" hidden>
-        <button id="view-grid" role="tab" class="is-active">Knob grid</button>
-        <button id="view-pg300" role="tab">PG-300</button>
+      <div id="view-switch" class="view-switch" role="tablist" aria-label="View">
+        <button id="view-grid" role="tab">Knob grid</button>
+        <button id="view-pg300" role="tab" class="is-active">PG-300</button>
       </div>
       <div id="stage-note" class="stage-note"></div>
     </div>
     <!-- The synth's display, built by js/lcd.js. The PG-300 view has one of its
          own, drawn into the panel, so this one belongs to the grid. -->
-    <div id="lcd-host" class="lcd-host"></div>
-    <div id="grid" class="grid"></div>
+    <div id="lcd-host" class="lcd-host" hidden></div>
+    <div id="grid" class="grid" hidden></div>
     <p id="grid-empty" class="empty-hint" hidden>
       No knobs yet. Set the grid size, then click a cell and press <b>Learn</b>
       while moving the control you want there.
     </p>
-    <!-- The PG-300 panel is built by js/pg300.js the first time it is shown. -->
-    <div id="pg300-host" hidden></div>
+    <!-- The PG-300 panel is built by js/pg300.js, which is straight away: the
+         page opens on it. The grid above starts hidden for the same reason, so
+         that the first paint is already the view the app is about to show. -->
+    <div id="pg300-host"></div>
   </section>
 
   <aside class="side">
 
     <!-- ------------------------------------------------ configure mode -->
-    <div id="panel-config">
+    <div id="panel-config" hidden>
 
       <section class="panel" id="panel-inspector" hidden>
         <h2 id="inspector-title">Knob</h2>
@@ -215,7 +225,7 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
     </div>
 
     <!-- -------------------------------------------------- perform mode -->
-    <div id="panel-perform" hidden>
+    <div id="panel-perform">
       <section class="panel">
         <h2>Running</h2>
         <dl id="perform-summary" class="summary"></dl>

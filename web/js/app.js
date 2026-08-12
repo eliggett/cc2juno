@@ -219,6 +219,10 @@ async function enableMidi() {
     $('midi-enable').hidden = true;
     fillPortMenus();
     autoSelectPorts();
+    // The page opens in Perform, before there are any ports to name, so the
+    // running banner waits until there are rather than printing a list of
+    // 'none'. Switching modes prints it again, as it always did.
+    if (state.mode === 'perform') logStartup();
     refresh();
   } catch (exc) {
     setStatus('bad', 'no access');
@@ -1391,12 +1395,17 @@ function setMode(mode) {
     otherTabWarned = false;
   }
 
+  showMode(mode);
+  save();
+  refresh();
+}
+
+/** Which mode button is lit and which side panel is up. */
+function showMode(mode) {
   $('mode-config').classList.toggle('is-active', mode === 'config');
   $('mode-perform').classList.toggle('is-active', mode === 'perform');
   $('panel-config').hidden = mode !== 'config';
   $('panel-perform').hidden = mode !== 'perform';
-  save();
-  refresh();
 }
 
 function refresh() {
@@ -1650,11 +1659,16 @@ function start() {
   if (!restored) state.cfg = cfgmod.makeConfig();
   router.setConfig(state.cfg);
 
-  // Perform mode with no MIDI access yet would look broken, so a restored
-  // session always comes back in Configure and is switched over deliberately.
-  state.mode = 'config';
-  $('panel-config').hidden = false;
-  $('panel-perform').hidden = true;
+  // The page opens on the PG-300, running. It is the view that says what the
+  // program is for, where Configure reads as a settings screen, and the mapping
+  // being live from the start costs nothing: nothing is sent until a knob moves
+  // or a slider is dragged. A stored mode and view are deliberately not restored,
+  // the way they were not before -- where the page opens should not depend on
+  // what was on screen when it was last closed.
+  state.mode = 'perform';
+  state.view = 'pg300';
+  showMode(state.mode);
+  announcePerforming();
 
   refresh();
 

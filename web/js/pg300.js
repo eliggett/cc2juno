@@ -120,13 +120,18 @@ export const LAYOUT = [
   // ---- DCO waveforms and PWM, second row
   { param: 3, cx: 59.36, top: 182.36, len: 43.52, labelY: 176.17, label: ['PULSE'],
     ticks: ['OFF', '', '', ''] },
-  { param: 4, cx: 87.20, top: 182.36, len: 63.78, labelY: 171.73, label: ['SAW', 'TOOTH'],
+  // Half the leading above the single-line labels beside it, which is what puts
+  // the middle of a two-line label level with the middle of a one-line one. The
+  // drawing had it 1.24 higher, and the row read as crooked. PWM / PWM RATE in
+  // the next section over already sit this way, to within a third of a unit.
+  { param: 4, cx: 87.20, top: 182.36, len: 63.78, labelY: 172.97, label: ['SAW', 'TOOTH'],
     ticks: ['OFF', '', '', '', '', ''] },
   { param: 5, cx: 114.78, top: 182.36, len: 63.78, labelY: 176.17, label: ['SUB'],
     ticks: ['', '', '', '', '', ''] },
   { param: 7, cx: 156.61, top: 202.35, len: 43.52, labelY: 189.68, label: ['SUB', 'LEVEL'],
     ticks: ['0', '1', '2', '3'] },
-  { param: 8, cx: 177.26, top: 202.35, len: 43.52, labelY: 188.63, label: ['NOISE', 'LEVEL'],
+  // Level with SUB LEVEL next to it; the drawing had it 1.05 higher.
+  { param: 8, cx: 177.26, top: 202.35, len: 43.52, labelY: 189.68, label: ['NOISE', 'LEVEL'],
     ticks: ['0', '1', '2', '3'] },
   { param: 14, cx: 203.13, top: 182.23, len: 63.65, labelY: 175.71, label: ['PWM'], ticks: UNIT },
   { param: 15, cx: 225.35, top: 182.23, len: 63.65, labelY: 172.88, label: ['PWM', 'RATE'],
@@ -648,6 +653,8 @@ export class Pg300Panel {
    * as the knobs: a mouse notch is a definite four counts of a 0..127 parameter,
    * a trackpad glides. A low-resolution parameter gets one step per notch, since
    * four steps of a four-position switch is the whole control.
+   *
+   * Wheel towards you raises the value, away lowers it, as on the knobs.
    */
   onWheel(slider, event) {
     event.preventDefault();
@@ -660,7 +667,7 @@ export class Pg300Panel {
     const whole = Math.trunc(slider.wheelRemainder);
     if (!whole) return;
     slider.wheelRemainder -= whole;
-    this.emit(slider, (slider.value === null ? 0 : slider.value) - whole);
+    this.emit(slider, (slider.value === null ? 0 : slider.value) + whole);
   }
 
   onKeyDown(slider, event) {

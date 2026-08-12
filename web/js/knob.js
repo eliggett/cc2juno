@@ -172,6 +172,8 @@ export class Knob {
    * fraction left over is carried, so one click of a mouse wheel is a definite
    * four counts while a trackpad glides a count at a time instead of doing
    * nothing until it has accumulated a whole notch.
+   *
+   * Wheel towards you turns the knob up, away turns it down.
    */
   onWheel(event) {
     if (!this.draggable) return;
@@ -188,7 +190,7 @@ export class Knob {
     this.wheelRemainder -= whole;
 
     const current = Math.round(this.fraction * 127);
-    const value = Math.max(0, Math.min(127, current - whole));
+    const value = Math.max(0, Math.min(127, current + whole));
     if (value === current) return;
     this.setFraction(value / 127);
     if (this.hooks.onInput) this.hooks.onInput(value);

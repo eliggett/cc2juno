@@ -191,6 +191,10 @@ the end.
 Everything is autosaved to the browser's local storage as you go, so a reload
 picks up where you left off. **Reset** clears it.
 
+The one thing a reload does not restore is where you were looking: the page
+always opens in Perform on the PG-300, whatever was on screen when it was last
+closed. Nothing is sent until a knob moves, so opening live costs nothing.
+
 ## The layout section
 
     layout:
