@@ -30,6 +30,9 @@ const state = {
   selected: null,         // index into layout.ccs, or null
   learning: null,         // index of the cell being learned, or null
   verbose: false,
+  // The side panel put away, which only Perform allows: in Configure it holds
+  // the editing itself, so there would be nothing left to work with.
+  sideHidden: false,
   inputName: null,        // remembered separately from the config's port names,
   outputName: null,       // since the browser may not have the port yet
   // The synth's own MIDI out. Kept here and not in the config: the config file is
@@ -163,6 +166,7 @@ function save() {
         synthInputName: state.synthInputName,
         mode: state.mode,
         view: state.view,
+        sideHidden: state.sideHidden,
         editLayer: state.editLayer,
       }));
     } catch (exc) {
@@ -188,6 +192,7 @@ function restore() {
     state.editLayer = Math.min(stored.editLayer || 0, state.cfg.layers.length - 1);
     state.mode = stored.mode === 'perform' ? 'perform' : 'config';
     state.view = stored.view === 'pg300' ? 'pg300' : 'grid';
+    state.sideHidden = stored.sideHidden === true;
     router.setConfig(state.cfg);
     return true;
   } catch (exc) {
@@ -1408,8 +1413,27 @@ function showMode(mode) {
   $('panel-perform').hidden = mode !== 'perform';
 }
 
+/**
+ * Put the side panel away, or bring it back.
+ *
+ * Only Perform can do without it. In Configure it is the editor -- the
+ * inspector, the grid size, the layers, the MIDI settings -- so hiding it would
+ * leave a screen with nothing to press.
+ */
+function showSide() {
+  const hidden = state.mode === 'perform' && state.sideHidden;
+  $('main').classList.toggle('no-side', hidden);
+  $('side').hidden = hidden;
+
+  const button = $('side-toggle');
+  button.hidden = state.mode !== 'perform';
+  button.textContent = hidden ? 'Show status' : 'Hide status';
+  button.setAttribute('aria-expanded', String(!hidden));
+}
+
 function refresh() {
   const panelView = showingPanel();
+  showSide();
   $('view-switch').hidden = state.mode !== 'perform';
   $('view-grid').classList.toggle('is-active', !panelView);
   $('view-pg300').classList.toggle('is-active', panelView);
@@ -1484,6 +1508,13 @@ function wire() {
   $('mode-perform').addEventListener('click', () => setMode('perform'));
   $('view-grid').addEventListener('click', () => setView('grid'));
   $('view-pg300').addEventListener('click', () => setView('pg300'));
+  $('side-toggle').addEventListener('click', () => {
+    state.sideHidden = !state.sideHidden;
+    save();
+    // The stage changes width, and the knob grid is laid out in columns that
+    // grow with it, so the whole stage is drawn again rather than just uncovered.
+    refresh();
+  });
 
   $('do-import').addEventListener('click', () => $('file-input').click());
   $('file-input').addEventListener('change', async (event) => {

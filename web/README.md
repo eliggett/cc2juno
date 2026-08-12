@@ -59,6 +59,11 @@ boundary dead zone and the same newest-value-wins queue as the CLI. Knobs light
 as they move and show what they are sending, the layer name is shown above the
 grid, and the log on the right prints the same lines the terminal build prints.
 
+**Hide status** puts that right-hand panel away and gives the whole window to
+the knobs or the PG-300; **Show status** brings it back. Only Perform offers it.
+Configure keeps the panel whatever this was last set to, because in that mode it
+is the editor — hiding it would leave a screen with nothing to press.
+
 Knobs can also be turned on screen, which goes through exactly the same path as a
 real CC — useful for testing without reaching for the controller, and for the
 parameters there were not enough knobs for. Drag up and down, roll the scroll

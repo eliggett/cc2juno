@@ -172,6 +172,10 @@ main {
   min-height: 0;
 }
 
+/* The side panel put away, in Perform. The column has to go with it, or the
+ * stage keeps the old width and the panel leaves a hole where it was. */
+main.no-side { grid-template-columns: minmax(0, 1fr); }
+
 .stage {
   padding: 18px 20px 28px;
   overflow: auto;

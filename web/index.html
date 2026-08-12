@@ -53,7 +53,7 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
 
 <div id="banners" class="banners" aria-live="polite"></div>
 
-<main>
+<main id="main">
   <section class="stage">
     <div class="stage-head">
       <div id="layer-bar" class="layer-bar"></div>
@@ -63,6 +63,9 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
         <button id="view-grid" role="tab">Knob grid</button>
         <button id="view-pg300" role="tab" class="is-active">PG-300</button>
       </div>
+      <!-- Perform only: Configure needs the side panel, since that is where the
+           editing is done. -->
+      <button id="side-toggle" class="quiet small" aria-controls="side">Hide status</button>
       <div id="stage-note" class="stage-note"></div>
     </div>
     <!-- The synth's display, built by js/lcd.js. The PG-300 view has one of its
@@ -79,7 +82,7 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
     <div id="pg300-host"></div>
   </section>
 
-  <aside class="side">
+  <aside id="side" class="side">
 
     <!-- ------------------------------------------------ configure mode -->
     <div id="panel-config" hidden>
