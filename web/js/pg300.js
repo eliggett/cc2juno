@@ -23,6 +23,7 @@
 // makes.
 
 import * as aj from './alpha_juno.js';
+import { displayText } from './lcd.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -53,6 +54,29 @@ const FRAME = {
 
 /** Bare card around the outermost lines. The original sketch had ~30 units. */
 const MARGIN = 5;
+
+/**
+ * The display, under the wordmark in the panel's empty top right corner.
+ *
+ * The real PG-300 has no screen -- it is a box of sliders and the synth does the
+ * talking -- so this is the Alpha Juno's own display borrowed into the space
+ * Roland left blank, rather than anything being reproduced. The bezel is thinner
+ * above and below than at the sides, the way the moulding on the synth is.
+ *
+ * The line is centred on the screen by cap height: the baseline sits half a
+ * capital below the middle, which is what puts a line of mostly capitals in the
+ * middle of a box. Descenders hang below that, and there is room for them.
+ */
+const LCD = {
+  width: 170,
+  height: 25,
+  top: 121,
+  padX: 7,          // bezel at the sides
+  padY: 3.5,        // bezel above and below
+  fontSize: 14,     // the longest line the display can hold, inside the screen
+  capHeight: 0.7,   // Matrix Sans Screen, from its OS/2 table
+  inset: 6,         // from the left of the screen to the first character
+};
 
 // The visible area. Everything is drawn in the drawing's coordinates and the
 // viewBox crops to the part that matters, so a measurement taken off the
@@ -298,6 +322,51 @@ export class Pg300Panel {
       }),
     );
     this.svg.append(logo);
+    this.buildLcd(cx);
+  }
+
+  /** The screen, centred under the wordmark. See LCD for how it is placed. */
+  buildLcd(cx) {
+    const left = cx - LCD.width / 2;
+    const screen = {
+      x: left + LCD.padX,
+      y: LCD.top + LCD.padY,
+      width: LCD.width - 2 * LCD.padX,
+      height: LCD.height - 2 * LCD.padY,
+    };
+
+    const group = element('g', { class: 'lcd-svg' });
+    group.append(
+      element('rect', {
+        class: 'lcd-bezel',
+        x: left, y: LCD.top, width: LCD.width, height: LCD.height, rx: 2, ry: 2,
+      }),
+      element('rect', { class: 'lcd-screen', ...screen }),
+    );
+
+    this.lcd = text(displayText({}), {
+      class: 'lcd-text',
+      // Anchored to the left of the screen rather than centred on it: the face
+      // is not quite fixed-pitch, so a centred line would shuffle sideways every
+      // time the patch changed. Hardware starts at the first cell and stays.
+      x: screen.x + LCD.inset,
+      y: screen.y + screen.height / 2 + (LCD.capHeight / 2) * LCD.fontSize,
+      'font-size': LCD.fontSize,
+      'text-anchor': 'start',
+      // SVG collapses runs of spaces, and this line is padded rather than
+      // written: without this the gap between the slot and the name closes up
+      // and a short name drags the whole line off centre.
+      'xml:space': 'preserve',
+    });
+    group.append(this.lcd);
+    this.svg.append(group);
+  }
+
+  /** Show the patch the synth last reported. `{program, name}`, both optional. */
+  setPatch(patch) {
+    const line = displayText(patch);
+    if (line === this.lcd.textContent) return;
+    this.lcd.textContent = line;
   }
 
   buildSlider(entry) {
@@ -443,15 +512,16 @@ export class Pg300Panel {
   /**
    * Redraw from one reading per parameter, indexed by parameter number.
    *
-   * A reading is {value, reach, cc}: `value` is the last value the synth was
-   * actually sent, or null if it never was, and `reach` says whether a knob on
+   * A reading is {value, reach, cc}: `value` is what the parameter is known to be
+   * -- the last value sent, or the one the synth reported when it last announced
+   * a patch -- or null if neither has happened, and `reach` says whether a knob on
    * this layer can move it ('layer'), a knob on some other layer can ('other'),
    * or nothing on the controller can ('none').
    *
    * A null value is drawn at the bottom of its travel but marked unknown, and it
-   * matters that those are two different things. The synth's patch cannot be
-   * read back, so a slider that has never been sent anything is not at zero --
-   * we simply have no idea where it is, and a fader has to be drawn somewhere.
+   * matters that those are two different things. With nothing heard from the
+   * synth, a slider that has never been sent anything is not at zero -- we simply
+   * have no idea where it is, and a fader has to be drawn somewhere.
    */
   update(readings) {
     this.fit();

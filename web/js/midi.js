@@ -63,10 +63,13 @@ export function describe(message) {
 export class MidiPorts {
   constructor() {
     this.access = null;
-    this.input = null;
-    this.output = null;
-    this.onMessage = null;        // (Uint8Array) => void
+    this.input = null;            // the controller
+    this.output = null;           // the synth's MIDI in
+    this.synthInput = null;       // the synth's MIDI out, which reports patches
+    this.onMessage = null;        // (Uint8Array) => void, from the controller
+    this.onSynthMessage = null;   // (Uint8Array) => void, from the synth
     this.onPortsChanged = null;   // () => void
+    this.attached = new Set();    // ports we have installed a handler on
   }
 
   get supported() {
@@ -88,6 +91,7 @@ export class MidiPorts {
       // shows the port as gone rather than silently sending into nothing.
       if (this.input && this.input.state === 'disconnected') this.setInput(null);
       if (this.output && this.output.state === 'disconnected') this.setOutput(null);
+      if (this.synthInput && this.synthInput.state === 'disconnected') this.setSynthInput(null);
       if (this.onPortsChanged) this.onPortsChanged();
     };
     return this.access;
@@ -113,17 +117,48 @@ export class MidiPorts {
   }
 
   setInput(port) {
-    if (this.input) this.input.onmidimessage = null;
     this.input = port || null;
-    if (this.input) {
-      this.input.onmidimessage = (event) => {
-        if (this.onMessage) this.onMessage(event.data);
-      };
-    }
+    this.listen();
+  }
+
+  /**
+   * The port the synth's own MIDI out arrives on, or null not to listen.
+   *
+   * Kept apart from the controller input because the two carry different things:
+   * one is knob movements to be translated, the other is the synth telling us
+   * what patch it is on. On a bidirectional interface they can be the same port,
+   * which is why listen() dispatches by role rather than by handler.
+   */
+  setSynthInput(port) {
+    this.synthInput = port || null;
+    this.listen();
   }
 
   setOutput(port) {
     this.output = port || null;
+  }
+
+  /**
+   * Install one handler per distinct port, dispatching to the roles it serves.
+   *
+   * A port serving both roles must not deliver its messages twice -- one
+   * controller knob would translate to two sysex messages -- so the handlers are
+   * keyed by port and not by role.
+   */
+  listen() {
+    for (const port of this.attached) port.onmidimessage = null;
+    this.attached.clear();
+
+    for (const port of [this.input, this.synthInput]) {
+      if (!port || this.attached.has(port)) continue;
+      const controller = port === this.input;
+      const synth = port === this.synthInput;
+      port.onmidimessage = (event) => {
+        if (controller && this.onMessage) this.onMessage(event.data);
+        if (synth && this.onSynthMessage) this.onSynthMessage(event.data);
+      };
+      this.attached.add(port);
+    }
   }
 
   send(bytes) {

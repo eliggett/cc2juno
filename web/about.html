@@ -30,14 +30,17 @@
   Roland Alpha Juno 1, Alpha Juno 2 or MKS-50.
 </p>
 
+<p>cc2juno is by Elliott Liggett with enormous contributions made by Claude Opus 5. This is open source software; the repo is <a href="https://github.com/eliggett/cc2juno">https://github.com/eliggett/cc2juno</a></p>
+
 <p>
-  Those synths have no knobs to speak of, and they do not respond to ordinary MIDI
-  CC messages either. Everything on the front panel is reached by paging through a
-  menu, and the only way in from outside is system exclusive. Roland sold the
-  PG-300 programmer to solve that. This does the same job with whatever CC
+  The classic Alpha Juno synths require menu diving to adjust, and they do not respond to ordinary MIDI
+  CC messages. Everything on the front panel is reached by paging through a
+  menu, and the only way in from outside is MIDI system exclusive (sysex). Roland sold the
+  PG-300 programmer to solve that, but these are becoming rare and expensive. cc2juno does the same job with whatever CC
   controller you already own: it listens for the CCs your knobs send, converts
   each one into the sysex message for the tone parameter you assigned it, and
-  passes anything it does not recognise straight through.
+  passes anything it does not recognise straight through. The web interface takes this further
+  by allowing on-screen parameter editing with the appearance of the classic PG-300. 
 </p>
 
 <p>
@@ -70,7 +73,9 @@
 </p>
 
 <p class="about-fine">
-  Free software under the GNU General Public License. Roland, Alpha Juno, MKS-50
+  Free software under the GNU General Public License. The display face is
+  <a href="https://github.com/FriedOrange/MatrixSans">Matrix Sans Screen</a> by
+  FriedOrange, used under the SIL Open Font License 1.1. Roland, Alpha Juno, MKS-50
   and PG-300 are trademarks of Roland Corporation, which has nothing to do with
   this program.
 </p>

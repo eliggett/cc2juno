@@ -13,6 +13,8 @@ import { Router } from './router.js';
 import { Knob } from './knob.js';
 import { Pg300Panel } from './pg300.js';
 import { MoveDetector, LEARN_MOVE_THRESHOLD } from './learn.js';
+import { SysexStream, parseToneMessage } from './tone_in.js';
+import { Lcd, patchLabel } from './lcd.js';
 
 const STORE_KEY = 'cc2juno.web.config';
 const GRANTED_KEY = 'cc2juno.web.midi-granted';
@@ -30,9 +32,14 @@ const state = {
   verbose: false,
   inputName: null,        // remembered separately from the config's port names,
   outputName: null,       // since the browser may not have the port yet
+  // The synth's own MIDI out. Kept here and not in the config: the config file is
+  // read by the Python and Tulip builds too, and a key only one of the three
+  // understands does not belong in a file all three write.
+  synthInputName: null,
 };
 
 const ports = new MidiPorts();
+const synthStream = new SysexStream();
 const detector = new MoveDetector(LEARN_MOVE_THRESHOLD);
 const router = new Router(state.cfg, {
   send: (bytes) => ports.send(bytes),
@@ -42,8 +49,11 @@ const router = new Router(state.cfg, {
   onLayer: () => { refresh(); },
 });
 
+const seenWrongChannel = new Set();   // synth channels complained about, once each
+
 let knobs = [];
 let panel = null;         // the PG-300, built the first time it is asked for
+let lcd = null;           // the display over the grid; the panel draws its own
 const seenUnmapped = new Set();   // `${layer}:${cc}`, so each is reported once
 const seenInactive = new Set();
 
@@ -83,6 +93,10 @@ function showingPanel() {
  *
  * `stale` is that state: the dial shows where the pot is, dimmed, and the value
  * is whatever the parameter was last actually set to, or nothing if it never was.
+ *
+ * A value the synth reported is the one case where the number is not something we
+ * sent, and it is better than something we sent -- it is what the synth actually
+ * has. `synced` marks it, because the pot is then the thing that is out of date.
  */
 function readingFor(cc, mapping) {
   const position = router.ccPositions.get(cc);
@@ -93,13 +107,25 @@ function readingFor(cc, mapping) {
   const live = router.sentOnLayer.has(cc);
   const sent = router.lastValue.get(param.index);
   const value = sent === undefined ? null : sent;
+  const synced = value !== null && router.fromSynth.has(param.index);
 
   return {
     text: value === null ? '' : String(value),
     option: value !== null && param.options.length ? param.options[value] : '',
-    fraction,
-    stale: !live,
+    // A synth value is drawn where the pot would have to be to produce it, so the
+    // dial reads as the parameter and a drag from it carries on rather than
+    // jumping. That is not where the pot is, which is what `synced` says.
+    fraction: synced ? ccFor(param, mapping, value) / (aj.CC_RANGE - 1) : fraction,
+    stale: !live && !synced,
+    synced,
   };
+}
+
+/** The CC position that produces `value` through this knob's scaling. */
+function ccFor(param, mapping, value) {
+  return mapping.mode === 'clamp'
+    ? Math.min(aj.CC_RANGE - 1, value)
+    : aj.ccForValue(param, value);
 }
 
 function banner(kind, text, { sticky = false } = {}) {
@@ -134,6 +160,7 @@ function save() {
         config: cfgmod.toJSON(state.cfg),
         inputName: state.inputName,
         outputName: state.outputName,
+        synthInputName: state.synthInputName,
         mode: state.mode,
         view: state.view,
         editLayer: state.editLayer,
@@ -157,6 +184,7 @@ function restore() {
     state.cfg = cfgmod.fromJSON(stored.config);
     state.inputName = stored.inputName || null;
     state.outputName = stored.outputName || null;
+    state.synthInputName = stored.synthInputName || null;
     state.editLayer = Math.min(stored.editLayer || 0, state.cfg.layers.length - 1);
     state.mode = stored.mode === 'perform' ? 'perform' : 'config';
     state.view = stored.view === 'pg300' ? 'pg300' : 'grid';
@@ -187,6 +215,7 @@ async function enableMidi() {
     localStorage.setItem(GRANTED_KEY, '1');
     ports.onPortsChanged = () => { fillPortMenus(); refresh(); };
     ports.onMessage = (data) => onMidiMessage(data);
+    ports.onSynthMessage = (data) => onSynthMessage(data);
     $('midi-enable').hidden = true;
     fillPortMenus();
     autoSelectPorts();
@@ -207,6 +236,7 @@ function fillPortMenus() {
   for (const [id, list, chosen] of [
     ['midi-in', ports.inputs(), ports.input],
     ['midi-out', ports.outputs(), ports.output],
+    ['midi-synth-in', ports.inputs(), ports.synthInput],
   ]) {
     const select = $(id);
     select.replaceChildren();
@@ -236,9 +266,31 @@ function autoSelectPorts() {
   const output = ports.find(ports.outputs(), wantOut);
   if (input) chooseInput(input);
   if (output) chooseOutput(output);
-  if (wantIn && !input) banner('warn', `MIDI input "${wantIn}" is not connected.`);
-  if (wantOut && !output) banner('warn', `MIDI output "${wantOut}" is not connected.`);
+  if (wantIn && !input) banner('warn', `Controller "${wantIn}" is not connected.`);
+  if (wantOut && !output) banner('warn', `Synth "${wantOut}" is not connected.`);
+
+  // A remembered synth input is a decision and is restored as one; the guess made
+  // from the output is not, so it is never written back as though it were.
+  const wantSynth = state.synthInputName;
+  const synthIn = wantSynth ? ports.find(ports.inputs(), wantSynth) : null;
+  if (synthIn) chooseSynthInput(synthIn);
+  else if (!wantSynth) ports.setSynthInput(matchingSynthInput());
+  else banner('warn', `Synth input "${wantSynth}" is not connected.`);
   fillPortMenus();
+}
+
+/**
+ * The input that goes with the chosen synth output, if one obviously does.
+ *
+ * A synth reached through one interface usually appears as an in and an out of
+ * the same name, so guessing costs nothing and saves the common case a step. The
+ * guess is only ever a starting point: choosing the port by hand overrides it,
+ * and once chosen it is remembered rather than guessed again.
+ */
+function matchingSynthInput() {
+  if (!ports.output) return null;
+  return ports.inputs().find((port) => port.name === ports.output.name)
+      || ports.find(ports.inputs(), ports.output.name);
 }
 
 function chooseInput(port) {
@@ -253,6 +305,18 @@ function chooseOutput(port) {
   ports.setOutput(port);
   state.outputName = port ? port.name : null;
   state.cfg.portOutput = state.outputName;
+  // The synth just changed, so a guess made from the old one is worse than a
+  // fresh guess. One made by hand is left alone.
+  if (!state.synthInputName) ports.setSynthInput(matchingSynthInput());
+  save();
+  fillPortMenus();
+  updateStatus();
+}
+
+function chooseSynthInput(port) {
+  ports.setSynthInput(port);
+  state.synthInputName = port ? port.name : null;
+  synthStream.reset();
   save();
   updateStatus();
 }
@@ -265,9 +329,9 @@ function updateStatus() {
   if (!ports.input && !ports.output) {
     setStatus('off', 'no ports chosen');
   } else if (!ports.output) {
-    setStatus('bad', 'no output');
+    setStatus('bad', 'no synth');
   } else if (!ports.input) {
-    setStatus('bad', 'no input');
+    setStatus('bad', 'no controller');
   } else if (state.mode === 'perform') {
     setStatus('on', 'running');
   } else {
@@ -276,6 +340,15 @@ function updateStatus() {
 }
 
 function onMidiMessage(data) {
+  // One bidirectional interface can be both ports at once, in which case the
+  // synth's own patch data arrives here as well. It is handled by the synth path
+  // and must not reach the router: thru would forward it straight back to the
+  // synth it came from, which is a loop the synth would answer.
+  if (ports.input === ports.synthInput
+      && (data[0] === aj.SYSEX_START || synthStream.collecting)) {
+    return;
+  }
+
   const message = decode(data);
 
   if (state.learning !== null) {
@@ -301,12 +374,75 @@ function onMidiMessage(data) {
   }
 }
 
+// --------------------------------------------------------- from the synth ---
+
+/**
+ * The synth's own MIDI out, which is a different conversation from the
+ * controller's.
+ *
+ * Nothing arriving here is ever forwarded. It has just come *from* the synth, so
+ * sending it back would be a loop, and with thru on that loop would be immediate.
+ * Hence this path never reaches router.handle(), which is where thru lives.
+ */
+function onSynthMessage(data) {
+  for (const message of synthStream.feed(data)) onSynthSysex(message);
+  if (synthStream.collecting || data[0] < 0x80) return;
+  if ((data[0] & 0xF0) === 0xC0) onSynthProgram((data[0] & 0x0F) + 1, data[1]);
+}
+
+function onSynthSysex(bytes) {
+  const message = parseToneMessage(bytes);
+  if (!message) {
+    if (state.verbose) logSynth(`    ignored: ${aj.hexString(bytes)}`, 'sysex');
+    return;
+  }
+  if (message.channel !== state.cfg.synthChannel) {
+    // Once per channel: a synth left on the wrong one would otherwise write a
+    // line every time a patch is changed, and the first line is the whole point.
+    if (!seenWrongChannel.has(message.channel)) {
+      seenWrongChannel.add(message.channel);
+      logSynth(`synth sent tone data on channel ${message.channel}, but the synth `
+               + `channel is set to ${state.cfg.synthChannel} — ignored`, 'unmapped');
+    }
+    return;
+  }
+
+  if (message.kind === 'tone') {
+    router.applyTone(message.values, { name: message.name });
+    const named = message.name ? ` "${message.name}"` : '';
+    logSynth(`synth${named} -> all 36 parameters read back from the synth`, 'layer');
+    refresh();
+    return;
+  }
+
+  const param = aj.PARAMETERS[message.index];
+  router.applyParam(message.index, message.value);
+  logSynth(`synth    -> ${param.name} = ${aj.label(param, message.value)}`, 'layer');
+  refreshStage();
+}
+
+function onSynthProgram(channel, program) {
+  if (channel !== state.cfg.synthChannel) return;
+  router.setPatch(program);
+  logSynth(`synth    -> patch ${patchLabel(program) || program}`, 'layer');
+  refreshStage();
+  if (state.mode === 'perform') renderSummary();
+}
+
+function logSynth(text, kind) {
+  if (state.mode === 'perform') logLine(text, kind);
+}
+
 // -------------------------------------------------------------- knob grid ---
 
 function buildGrid() {
   const grid = $('grid');
   const cells = state.cfg.layout.rows * state.cfg.layout.cols;
   grid.style.setProperty('--cols', state.cfg.layout.cols);
+  // The display sits in a mirror of the grid's own columns so that centring it
+  // centres it over the knobs. Below three there is not enough width to centre
+  // anything in, and the display keeps its own.
+  $('lcd-host').style.setProperty('--cols', Math.max(3, state.cfg.layout.cols));
 
   if (knobs.length !== cells) {
     grid.replaceChildren();
@@ -397,15 +533,25 @@ function refreshKnobs() {
       reading: reading.text,
       fraction: reading.fraction,
       stale,
-      title: stale
-        ? `${param.name} has not taken effect on this layer yet — move the knob and `
-          + 'it will jump to wherever it is sitting'
-        : '',
+      title: titleFor(param, stale, reading.synced),
       selected: state.selected === i,
       learning: state.learning === i,
       draggable: state.mode === 'perform',
     });
   });
+}
+
+/** Why a knob is showing what it is showing, when that is worth explaining. */
+function titleFor(param, stale, synced) {
+  if (stale) {
+    return `${param.name} has not taken effect on this layer yet — move the knob and `
+         + 'it will jump to wherever it is sitting';
+  }
+  if (synced) {
+    return `${param.name} is the synth's own value, read from the patch it last `
+         + 'sent — the physical knob has not moved, so it is somewhere else';
+  }
+  return '';
 }
 
 function onKnobActivity({ cc }) {
@@ -438,9 +584,10 @@ function onLocalKnob(cell, value) {
  * The grid draws the controller, so a knob there shows where its pot is sitting.
  * The panel draws the synth, so a slider here shows the value the parameter has
  * been set to -- which is the same rule the grid follows for its numbers,
- * applied to the thing the panel is a picture of. A parameter that has
- * never been sent has no position at all: the synth's patch cannot be read back,
- * so the slider says so rather than sitting at zero and implying otherwise.
+ * applied to the thing the panel is a picture of. A parameter nobody has touched
+ * has no position at all: unless the synth has announced a patch, its settings
+ * are unknown, and the slider says so rather than sitting at zero and implying
+ * otherwise. Choosing a patch on the synth fills the whole panel in at once.
  */
 function panelReadings() {
   const layer = state.cfg.layers[router.layer];
@@ -502,12 +649,38 @@ function refreshPanel() {
     $('pg300-host').append(panel.el);
   }
   panel.update(panelReadings());
+  panel.setPatch(patchReading());
+}
+
+// ----------------------------------------------------------------- display ---
+
+/**
+ * What the synth's own screen would be showing.
+ *
+ * The two halves arrive as two messages -- the tone data names the sound, the
+ * program change that follows says which slot it came from -- so either can be
+ * missing, and the display is built to say so rather than to wait.
+ */
+function patchReading() {
+  return { program: router.patch, name: router.toneName };
+}
+
+function refreshLcd() {
+  if (!lcd) {
+    lcd = new Lcd();
+    $('lcd-host').append(lcd.el);
+  }
+  lcd.set(patchReading());
 }
 
 /** Redraw whichever of the two views the stage is showing. */
 function refreshStage() {
-  if (showingPanel()) refreshPanel();
-  else refreshKnobs();
+  if (showingPanel()) {
+    refreshPanel();
+    return;
+  }
+  refreshKnobs();
+  refreshLcd();
 }
 
 function setView(view) {
@@ -691,7 +864,7 @@ function fillParamMenu(currentCc) {
 
 function startLearn(index) {
   if (!ports.input) {
-    banner('warn', 'Choose a MIDI input first, or type the CC number in by hand.');
+    banner('warn', 'Choose a controller first, or type the CC number in by hand.');
     return;
   }
   state.learning = index;
@@ -891,8 +1064,9 @@ function renderSummary() {
 
   const mapped = cfgmod.allMappedCcs(cfg).size;
   const rows = [
-    ['Input', ports.input ? ports.input.name : 'none'],
-    ['Output', ports.output ? ports.output.name : 'none'],
+    ['From controller', ports.input ? ports.input.name : 'none'],
+    ['To synth', ports.output ? ports.output.name : 'none'],
+    ['From synth', ports.synthInput ? ports.synthInput.name : 'none'],
     ['Listening', cfg.listenChannel === null ? 'any channel' : `channel ${cfg.listenChannel}`],
     ['Synth channel', String(cfg.synthChannel)],
     ['Knobs', cfgmod.isLayered(cfg)
@@ -906,6 +1080,10 @@ function renderSummary() {
     const [low, high] = aj.regionBounds(param, router.layer);
     rows.push(['Layer', `${cfgmod.layerLabel(cfg.layers[router.layer])}  `
                         + `(CC${cfg.layerCc} ${low}-${high})`]);
+  }
+  if (router.patch !== null || router.toneName) {
+    rows.push(['Synth patch',
+               [patchLabel(router.patch), router.toneName].filter(Boolean).join('  ')]);
   }
 
   for (const [term, description] of rows) {
@@ -1012,9 +1190,13 @@ function logEntry(entry) {
 function logStartup() {
   const cfg = state.cfg;
   const listen = cfg.listenChannel === null ? 'any channel' : `channel ${cfg.listenChannel}`;
-  logLine(`Input:   ${ports.input ? ports.input.name : 'none'}`, 'layer');
-  logLine(`Output:  ${ports.output ? ports.output.name : 'none'}`, 'layer');
+  logLine(`From controller: ${ports.input ? ports.input.name : 'none'}`, 'layer');
+  logLine(`To synth:        ${ports.output ? ports.output.name : 'none'}`, 'layer');
+  logLine(`From synth:      ${ports.synthInput ? ports.synthInput.name : 'none'}`, 'layer');
   logLine(`Listening on ${listen}, sending to synth channel ${cfg.synthChannel}`, 'layer');
+  if (ports.synthInput) {
+    logLine('    Patch changes on the synth will move the knobs to match.', 'layer');
+  }
 
   const mapped = cfgmod.allMappedCcs(cfg).size;
   const summary = cfgmod.isLayered(cfg)
@@ -1190,15 +1372,17 @@ function setMode(mode) {
 
   if (mode === 'perform') {
     if (!ports.output) {
-      banner('warn', 'No MIDI output chosen, so nothing will reach the synth.');
+      banner('warn', 'No synth chosen, so nothing will reach the synth.');
     }
     if (ports.echoing && state.cfg.thru) {
-      banner('warn', 'Input and output are the same port, so thru will echo messages '
-                     + 'straight back.');
+      banner('warn', 'The controller and the synth are the same port, so thru will echo '
+                     + 'messages straight back.');
     }
     router.reset();
+    synthStream.reset();
     seenUnmapped.clear();
     seenInactive.clear();
+    seenWrongChannel.clear();
     logLine('', 'layer');
     logStartup();
     announcePerforming();
@@ -1221,6 +1405,8 @@ function refresh() {
   $('view-grid').classList.toggle('is-active', !panelView);
   $('view-pg300').classList.toggle('is-active', panelView);
   $('pg300-host').hidden = !panelView;
+  // The panel draws a display of its own, so the grid's would be a second one.
+  $('lcd-host').hidden = panelView;
 
   if (panelView) {
     // buildGrid owns these two normally, and it is not running.
@@ -1230,6 +1416,7 @@ function refresh() {
   } else {
     buildGrid();
     refreshKnobs();
+    refreshLcd();
   }
   renderLayerBar();
   renderStageNote();
@@ -1279,6 +1466,9 @@ function wire() {
   });
   $('midi-out').addEventListener('change', (event) => {
     chooseOutput(ports.outputs().find((port) => port.id === event.target.value) || null);
+  });
+  $('midi-synth-in').addEventListener('change', (event) => {
+    chooseSynthInput(ports.inputs().find((port) => port.id === event.target.value) || null);
   });
 
   $('mode-config').addEventListener('click', () => setMode('config'));

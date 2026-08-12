@@ -21,7 +21,9 @@ The `--thru` argument may be passed to permit notes to travel from midi in to mi
 Within the "web" directory is a browser version, built on Web MIDI. It draws your
 controller as a grid of knobs (and you define the grid) and lets you click one to learn its CC and pick its
 function, which is a good deal friendlier than editing YAML by hand — and it
-imports and exports exactly the file the other builds read. See
+imports and exports exactly the file the other builds read. It can also listen to
+the synth: connect the Alpha Juno's MIDI out as well and every knob and slider on
+screen follows the patches you choose on the synth itself. See
 [web/README.md](web/README.md). A development HTTPS server is included, since Web
 MIDI needs a secure context. Or, you can launch the latest version directly from [here](https://eliggett.github.io/cc2juno/). 
 

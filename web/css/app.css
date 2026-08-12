@@ -24,6 +24,13 @@
   --danger:    #ff6b6b;
   --ok:        #7ddc82;
 
+  /* The display: a grey bezel, a light grey screen, darker grey segments. The
+   * only part of the page that is lighter than the page. */
+  --lcd-face:   "Matrix Sans Screen", var(--mono);
+  --lcd-bezel:  #6e7477;
+  --lcd-screen: #c4c9c0;
+  --lcd-ink:    #3b4240;
+
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
@@ -77,6 +84,8 @@ body {
 #about-open:hover { background: var(--info-bright); border-color: var(--info-bright); }
 
 .ports, .files, .modes { display: flex; align-items: center; gap: 8px; }
+/* Three port menus is more than a narrow window has room for in one line. */
+.ports { flex-wrap: wrap; }
 .ports label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .ports select { max-width: 210px; }
 
@@ -244,6 +253,98 @@ main {
   flex: none;
 }
 .layer-names input { flex: 1; }
+
+/* ------------------------------------------------------------------ LCD --- */
+
+/* A dot-matrix face, so the display reads as a display rather than as a line of
+ * text in a grey box. Matrix Sans Screen is the variant with separate square
+ * dots, which is what an LCD character cell looks like.
+ * Matrix Sans by FriedOrange, SIL Open Font License 1.1 — see fonts/MatrixSans.
+ *
+ * The other five variants of the family are in the same folder and are a one
+ * line change: put the file name in the src below and the family name in
+ * --lcd-face above. Nothing else is measured against the face.
+ */
+@font-face {
+  font-family: "Matrix Sans Screen";
+  src: url("../fonts/MatrixSans/fonts/webfonts/MatrixSansScreen-Regular.woff2")
+       format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* The screen is the one part of this page that is not dark: it is a picture of a
+ * grey LCD, and a grey LCD does not glow. */
+.lcd-host {
+  /* The same track definition as the grid, so that a display centred in it is
+   * centred over the knobs however the window is sized. Three columns' worth
+   * when the grid is narrower, which is about the width of the display itself. */
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), minmax(96px, 132px));
+  gap: 14px;
+  justify-content: start;
+  margin-bottom: 16px;
+}
+
+.lcd-host > .lcd {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+
+.lcd {
+  background: var(--lcd-bezel);
+  border-radius: 4px;
+  /* Thin above and below, wider at the sides, the way the moulding is. */
+  padding: 4px 12px;
+  box-shadow: inset 0 1px 0 #ffffff1f, 0 1px 3px #00000059;
+}
+
+.lcd-screen {
+  background: var(--lcd-screen);
+  border-radius: 2px;
+  padding: 5px 10px;
+  box-shadow: inset 0 1px 2px #0000003d;
+}
+
+/* The face, shared by both displays. Nothing here may set a size: the panel's
+ * display is sized in the drawing's own units by a font-size attribute, and a
+ * size in here would beat that attribute and overrun the bezel. */
+.lcd-text {
+  font-family: var(--lcd-face);
+  letter-spacing: 0;
+  /* The line is padded rather than written, so its spaces are the layout. This
+   * is needed on the SVG text as much as on the HTML one: CSS white-space wins
+   * over the xml:space attribute, so leaving it out silently closes the gap
+   * between the slot and the name back up to a single space. */
+  white-space: pre;
+}
+
+.lcd .lcd-text {
+  font-size: 22px;
+  line-height: 1;
+  display: block;
+  color: var(--lcd-ink);
+  white-space: pre;          /* the padding between the slot and the name */
+  /* A real display does not change size with what is on it, and this face is
+   * not quite fixed-pitch -- '1' and 'l' are narrower than the rest -- so the
+   * line is given the room the longest one needs and starts at the left of it.
+   * Wide enough for 17 characters of the widest sort, with a little to spare. */
+  width: 10.2em;
+  text-align: left;
+}
+
+/* The panel's own display, drawn into the SVG rather than over it. */
+.lcd-svg .lcd-bezel { fill: var(--lcd-bezel); }
+.lcd-svg .lcd-screen { fill: var(--lcd-screen); }
+/* The panel sets a condensed sans for every text in it, and that rule is more
+ * specific than .lcd-text, so the face has to be named again here. */
+.pg300-svg text.lcd-text {
+  font-family: var(--lcd-face);
+  font-weight: 400;
+  font-stretch: normal;
+  fill: var(--lcd-ink);
+}
 
 /* ----------------------------------------------------------------- grid --- */
 

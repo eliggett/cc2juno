@@ -18,6 +18,8 @@ import * as aj from './js/alpha_juno.js';
 import * as cfgmod from './js/config.js';
 import { Router } from './js/router.js';
 import * as pg from './js/pg300.js';
+import * as tonein from './js/tone_in.js';
+import * as lcd from './js/lcd.js';
 import { parse as parseYaml, YamlError } from './js/yaml.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -622,6 +624,247 @@ check('a slider moved on screen survives the trip through a knob', () => {
             value, `${param.name} = ${value} came back as something else`);
     }
   }
+});
+
+// ------------------------------------------------- tone data from the synth ---
+
+// Captured from an Alpha Juno announcing a patch change: APR, tone level, all 36
+// parameters and the ten name bytes. Every test in this section is measured
+// against this rather than against our own encoder, so that agreeing with
+// ourselves cannot be mistaken for agreeing with the synth.
+const APR_HEX = 'F0 41 35 00 23 20 01 00 02 02 03 03 00 02 00 00 01 01 00 00 18 6E 40 4D '
+              + '00 00 62 50 60 47 00 57 2E 00 7F 00 7A 30 34 28 08 50 02 0F 28 25 32 12 '
+              + '32 27 2D 21 35 F7';
+const APR = Uint8Array.from(APR_HEX.split(' ').map((byte) => parseInt(byte, 16)));
+
+const APR_VALUES = [0, 2, 2, 3, 3, 0, 2, 0, 0, 1, 1, 0, 0, 24, 110, 64, 77, 0, 0, 98, 80,
+                    96, 71, 0, 87, 46, 0, 127, 0, 122, 48, 52, 40, 8, 80, 2];
+
+check('a patch change from the synth reads as 36 parameters and a name', () => {
+  const message = tonein.parseToneMessage(APR);
+  equal(message.kind, 'tone');
+  equal(message.channel, 1);
+  equal(message.name, 'PolySynth1');
+  equal(message.values, APR_VALUES);
+});
+
+check('the parameters land in the order the tone table uses', () => {
+  // The bulk-dump format reorders them and stores six in four bits; APR does
+  // neither, and reading one as though it were the other is the mistake this
+  // catches. Spot-checked against the captured message by name.
+  const { values } = tonein.parseToneMessage(APR);
+  equal(values[aj.lookup('VCF Cutoff').index], 0x4D);
+  equal(values[aj.lookup('DCO Range').index], 2);
+  equal(values[aj.lookup('Chorus Switch').index], 1);
+  equal(values[aj.lookup('ENV L1').index], 0x7F);
+  equal(values[aj.lookup('Bender Range').index], 2);
+  // A four-bit parameter on the wire is still a 0-127 number here.
+  equal(values[aj.lookup('VCF Key Follow').index], 0x50);
+});
+
+check('an APR with no name is still a patch', () => {
+  const bare = Uint8Array.from([...APR.slice(0, 43), 0xF7]);
+  const message = tonein.parseToneMessage(bare);
+  equal(message.kind, 'tone');
+  equal(message.name, '');
+  equal(message.values, APR_VALUES);
+});
+
+check('an individual parameter message reads as one parameter', () => {
+  const message = tonein.parseToneMessage(
+    Uint8Array.from(aj.buildSysex(aj.lookup('VCF Cutoff').index, 99, 3)));
+  equal(message, { kind: 'param', channel: 3, index: 16, value: 99 });
+});
+
+check('messages that are not tone data are ignored', () => {
+  const swap = (index, byte) => {
+    const copy = Uint8Array.from(APR);
+    copy[index] = byte;
+    return copy;
+  };
+  equal(tonein.parseToneMessage(swap(1, 0x43)), null, 'another manufacturer');
+  equal(tonein.parseToneMessage(swap(2, 0x37)), null, 'a bulk dump');
+  equal(tonein.parseToneMessage(swap(4, 0x24)), null, 'another format type');
+  // The MKS-50 sends patch and chord levels through the same opcode; their bytes
+  // are not tone parameters and must not be read as any.
+  equal(tonein.parseToneMessage(swap(5, 0x30)), null, 'patch level');
+  equal(tonein.parseToneMessage(APR.slice(0, 20)), null, 'truncated');
+});
+
+check('a message split across events is gathered up', () => {
+  const stream = new tonein.SysexStream();
+  equal(stream.feed(APR.slice(0, 10)), [], 'a fragment is not a message');
+  assert(stream.collecting, 'the stream should know it is mid-message');
+  equal(stream.feed(APR.slice(10, 30)), []);
+  const done = stream.feed(APR.slice(30));
+  equal(done.length, 1);
+  equal(tonein.parseToneMessage(done[0]).name, 'PolySynth1');
+  assert(!stream.collecting, 'the stream should be idle again');
+});
+
+check('clock bytes inside a message do not break it', () => {
+  const stream = new tonein.SysexStream();
+  const noisy = [...APR.slice(0, 12), 0xF8, ...APR.slice(12, 40), 0xFE, ...APR.slice(40)];
+  const found = stream.feed(Uint8Array.from(noisy));
+  equal(found.length, 1);
+  equal(tonein.parseToneMessage(found[0]).values, APR_VALUES);
+});
+
+check('a truncated message does not swallow the one after it', () => {
+  const stream = new tonein.SysexStream();
+  // The synth is unplugged mid-message; what arrives next is a whole one.
+  const found = stream.feed(Uint8Array.from([...APR.slice(0, 20), ...APR]));
+  equal(found.length, 1);
+  equal(tonein.parseToneMessage(found[0]).name, 'PolySynth1');
+});
+
+check('a patch change moves every knob and empties the queue', () => {
+  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+  const router = new Router(cfg);
+  router.dryRun = true;
+
+  // A knob is moved, so there is something queued and something already sent.
+  const [cc, mapping] = [...cfg.layers[router.layer].byCc][0];
+  router.handleCc(cc, 64, mapping);
+  assert(router.pending.size === 1, 'the move should be queued');
+
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+
+  equal(router.pending.size, 0, 'queued edits would have overwritten the new patch');
+  equal(router.toneName, 'PolySynth1');
+  for (const param of aj.PARAMETERS) {
+    equal(router.lastValue.get(param.index), APR_VALUES[param.index], param.name);
+    assert(router.fromSynth.has(param.index), `${param.name} should be the synth's value`);
+  }
+});
+
+check('a patch change does not pretend the pots moved', () => {
+  // Where the pots are is the one thing a patch change says nothing about, and it
+  // is the only record of where the controller physically is. The display draws
+  // the knobs from the values instead.
+  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+  const router = new Router(cfg);
+  router.dryRun = true;
+
+  const [cc] = [...cfg.layers[router.layer].byCc][0];
+  router.handle(Uint8Array.from([0xB0, cc, 100]));
+  router.applyTone(APR_VALUES);
+
+  equal(router.ccPositions.get(cc), 100, 'the pot is still where it was left');
+  equal(router.ccPositions.size, 1, 'no other pot has a position to report');
+});
+
+check("a knob drawn at the synth's value would send that value back", () => {
+  // The dial is drawn at the CC position that produces the parameter's value, so
+  // that dragging it on screen carries on from there instead of jumping. That
+  // position has to convert back to the same value.
+  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+  for (const [, mapping] of cfg.layers[0].byCc) {
+    const param = cfgmod.paramFor(mapping);
+    const value = APR_VALUES[param.index];
+    const position = mapping.mode === 'clamp'
+      ? Math.min(aj.CC_RANGE - 1, value)
+      : aj.ccForValue(param, value);
+    equal(aj.convert(param, position, { mode: mapping.mode }), value,
+          `${param.name} would be drawn somewhere that means something else`);
+  }
+});
+
+check('our own send takes over from the value the synth reported', () => {
+  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+  const router = new Router(cfg);
+  router.dryRun = true;
+  router.applyTone(APR_VALUES);
+
+  const cutoff = aj.lookup('VCF Cutoff');
+  router.sendParam(cutoff.index, 12);
+  router.flush();
+  equal(router.lastValue.get(cutoff.index), 12);
+  assert(!router.fromSynth.has(cutoff.index), 'the newer value is ours, not the synth\'s');
+});
+
+check('a single parameter from the synth moves only that knob', () => {
+  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+  const router = new Router(cfg);
+  router.dryRun = true;
+  router.applyTone(APR_VALUES);
+
+  const cutoff = aj.lookup('VCF Cutoff');
+  router.applyParam(cutoff.index, 5);
+  equal(router.lastValue.get(cutoff.index), 5);
+  for (const param of aj.PARAMETERS) {
+    if (param === cutoff) continue;
+    equal(router.lastValue.get(param.index), APR_VALUES[param.index], param.name);
+  }
+});
+
+check('a value the tone table cannot hold is clipped, not passed on', () => {
+  const wild = Uint8Array.from(APR);
+  wild[7 + aj.lookup('Bender Range').index] = 0x7F;   // documented 0-12
+  const { values } = tonein.parseToneMessage(wild);
+  equal(values[aj.lookup('Bender Range').index], 12);
+});
+
+// ------------------------------------------------------------- the display ---
+
+// The second captured patch: the first memory slot, sent with a program change
+// of 0 where the preset above sent 64.
+const MEMORY_HEX = 'F0 41 35 00 23 20 01 00 03 02 03 00 00 01 00 00 01 01 0A 00 10 3E 60 '
+                 + '4E 00 01 3F 40 18 4A 28 59 46 35 33 46 7F 48 58 3A 18 4D 0C 09 2E 27 '
+                 + '28 12 2D 2B 27 20 35 F7';
+const MEMORY = Uint8Array.from(MEMORY_HEX.split(' ').map((byte) => parseInt(byte, 16)));
+
+check('a program number reads as the slot the synth shows', () => {
+  // Both ends of both halves. The second digit is a bank position, not a units
+  // column, so it steps 8 -> 1 with the first digit rather than 9 -> 10.
+  equal(lcd.patchLabel(0), 'M-11');
+  equal(lcd.patchLabel(7), 'M-18');
+  equal(lcd.patchLabel(8), 'M-21');
+  equal(lcd.patchLabel(63), 'M-88');
+  equal(lcd.patchLabel(64), 'P-11');
+  equal(lcd.patchLabel(127), 'P-88');
+  equal(lcd.patchLabel(128), null);
+  equal(lcd.patchLabel(-1), null);
+  equal(lcd.patchLabel(null), null);
+});
+
+check('every slot is a bank 1-8 and an instrument 1-8, and nothing else', () => {
+  const labels = new Set();
+  for (let program = 0; program < 128; program += 1) {
+    const label = lcd.patchLabel(program);
+    assert(/^[MP]-[1-8][1-8]$/.test(label), `program ${program} gave ${label}`);
+    labels.add(label);
+  }
+  equal(labels.size, 128, 'two programs share a label');
+});
+
+check('the display shows the slot and the tone name, as the synth does', () => {
+  const preset = tonein.parseToneMessage(APR);
+  equal(lcd.displayText({ program: 64, name: preset.name }), 'P-11   PolySynth1');
+
+  const memory = tonein.parseToneMessage(MEMORY);
+  equal(memory.values.length, 36);
+  equal(lcd.displayText({ program: 0, name: memory.name }), 'M-11   JunoStrng1');
+});
+
+check('a half-known patch is shown as half known', () => {
+  // The tone data and the program change are two messages, so the screen really
+  // does pass through each of these.
+  equal(lcd.displayText({}), '----   ----------');
+  equal(lcd.displayText({ program: 87 }), 'P-38   ----------');
+  equal(lcd.displayText({ name: 'Moogie' }), '----   Moogie    ');
+});
+
+check('the display is always exactly one line of COLUMNS characters', () => {
+  const lines = [
+    lcd.displayText({}),
+    lcd.displayText({ program: 0, name: 'JunoStrng1' }),
+    lcd.displayText({ program: 127, name: 'A' }),
+    // A name longer than the synth can send is cut rather than pushing the line
+    // wide, since the display it is drawn in has a fixed number of characters.
+    lcd.displayText({ program: 5, name: 'far too long to fit' }),
+  ];
+  for (const line of lines) equal(line.length, lcd.COLUMNS, `"${line}" is the wrong width`);
 });
 
 // ------------------------------------------------------------------- done ---

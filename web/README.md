@@ -76,7 +76,8 @@ The display says so rather than leaving you to remember it. Straight after a
 layer change every knob is marked **not live**, drawn dim, with the dial showing
 where the pot is sitting and no value claimed for it — because the synth has not
 been told anything. Move the knob and it goes bright, jumping to wherever the pot
-happens to be. A number on a knob is only ever a value that was really sent.
+happens to be. A number on a knob is only ever a value that was really sent — or,
+if the synth is telling you what patch it is on, one the synth really has.
 
 Two things worth knowing, both of which look like the program mapping a knob to
 the wrong thing:
@@ -108,9 +109,10 @@ your hands can reach:
 - **Dim** — nothing on the controller reaches it.
 
 A slider with a **faded cap parked at the bottom** has not been set this session.
-That is not the same as being at zero: the synth's patch cannot be read back, so
-the panel says it does not know rather than drawing a value nobody sent. It fills
-in as the parameter is used.
+That is not the same as being at zero: with nothing heard from the synth its
+settings are unknown, so the panel says so rather than drawing a value nobody
+sent. It fills in as the parameter is used — or all at once, if the synth is
+telling you what patch it is on.
 
 Every slider can be moved on screen, mapped or not — drag it, roll the wheel over
 it, or use the arrow keys, **Home** and **End** when one has focus, with
@@ -120,7 +122,59 @@ about it; the other thirty-odd sliders are sent directly. Either way it goes int
 the same rate-limited queue, and the log names it.
 
 The empty area at the top right is the one Roland put their logo in. Ours is a
-placeholder: replace the contents of `#pg300-logo` in `js/pg300.js`.
+placeholder: replace the contents of `#pg300-logo` in `js/pg300.js`. The display
+below it is a separate group and stays where it is.
+
+## Listening to the synth
+
+An Alpha Juno announces itself. Choose a patch on the synth and it sends its
+whole edit buffer — all 36 parameters and the tone name — as one sysex message;
+move a slider on its own panel, or on a real PG-300, and it sends that one
+parameter. Give cc2juno somewhere to hear that and the display stops guessing:
+every knob and every slider jumps to what the synth actually has.
+
+Connect the synth's **MIDI out** to an input on your interface and pick it in the
+**From synth** menu. It is optional, and everything else works without it. If the
+interface presents its in and out under the same name — most do — the menu is
+filled in for you the moment you choose the synth, and picking one by hand
+overrides that from then on.
+
+What arrives is acted on, never passed on. It has just come *from* the synth, so
+sending it back would be a loop; this holds even when one bidirectional port is
+serving as both the controller input and the synth input.
+
+Then:
+
+- **A patch change** moves every knob on the current layer and every slider on
+  the PG-300, and names the patch in the log and in the **Running** panel.
+- **The display** shows what the synth's own screen shows: the slot, then the
+  tone name. `M-11` to `M-88` are the 64 writable memories, `P-11` to `P-88` the
+  64 presets, numbered by bank and by position in the bank the way the synth
+  numbers them — so the second digit runs 1-8 and never reaches 9. There is one
+  above the knob grid and one on the PG-300, under the wordmark where Roland left
+  the panel blank. The two halves arrive separately, the tone data first and the
+  program number just behind it, so a screen reading `----   PolySynth1` for a
+  moment is it waiting for the second half rather than anything being wrong.
+
+  The face is Matrix Sans Screen, the variant with separate square dots. The
+  other five variants of the family ship alongside it; to use one, change
+  `--lcd-face` in `css/app.css` and the `@font-face` above it. Nothing else is
+  measured against the face.
+- **Anything still queued is dropped.** Those messages were aimed at the patch
+  that has just been replaced, and letting them out would edit the new one a
+  moment after it loaded.
+- **The knobs on screen move; the ones on your desk do not.** The dials are drawn
+  where the synth's values put them, so dragging one on screen carries on from
+  the right place, but the physical pots are still wherever you left them. The
+  first one you turn jumps its parameter, the same as after a layer change.
+- **Tone data on another channel is ignored**, and says so once in the log — a
+  synth left on the wrong channel looks exactly like one that is not connected,
+  which is worth being told about rather than having to work out.
+
+Five parameters — the two aftertouch depths, VCF and envelope key follow, and DCO
+aftertouch — are stored by the synth in four bits, though they are sent and
+received as 0–127. Values read back from a patch are therefore always multiples
+of 8, and a slider will visibly settle onto one after you move it.
 
 ## Import and export
 
@@ -167,6 +221,9 @@ does not throw the grid away; the Tulip build skips it.
 | `js/yaml.js` | The small YAML reader, matching the Tulip build's dialect |
 | `js/router.js` | Mapping state, layer state, rate limiter, thru |
 | `js/midi.js` | Web MIDI access, port selection, message decoding |
+| `js/tone_in.js` | Reading the patch data the synth broadcasts back |
+| `js/lcd.js` | The display, and the M-11/P-88 slot numbering it shows |
+| `fonts/MatrixSans/` | Matrix Sans by FriedOrange, SIL OFL 1.1 — the display face |
 | `js/knob.js` | One knob: the SVG dial and its pointer handling |
 | `js/pg300.js` | The PG-300 panel: its geometry, and one slider's behaviour |
 | `js/learn.js` | Deciding when a control has really been moved |
@@ -193,7 +250,5 @@ those sections are skipped and the rest still runs.
   - Perhaps this would just be lists/categories of patches instantly auditioned, without messing around with the synth's internal preset memory slots. 
 2. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
 3. Printable template art to go around generic midi CC hardware box. Will need knob spacing information. 
-4. When the user changes patches on the synth, sysex is emitted from the synth, which contains the current settings for each knob. We should apply these to the UI when we have the data available, especially for the PG-300 display. 
-5. Change "input" and "output" midi labels to "Controller" and "Synth", respectivly. 
 6. Drop down menu to select that all controller UI elements are vertical sliders, horizontal sliders, or knobs. Does not alter PG-300 appearance at all. 
 7. Support for CC buttons and delta-encoders. Maybe buttons for layers? 

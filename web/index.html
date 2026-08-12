@@ -16,11 +16,15 @@
   </div>
 
   <div class="ports">
-    <label>Controller:
+    <label>From Controller:
       <select id="midi-in"><option value="">&mdash;</option></select>
     </label>
-    <label>Synth:
+    <label>To Synth:
       <select id="midi-out"><option value="">&mdash;</option></select>
+    </label>
+    <label title="The synth's own MIDI out. An Alpha Juno announces every patch
+change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
+      <select id="midi-synth-in"><option value="">&mdash;</option></select>
     </label>
     <button id="midi-enable" class="primary">Enable MIDI</button>
     <span id="midi-status" class="status status-off">no access</span>
@@ -53,6 +57,9 @@
       </div>
       <div id="stage-note" class="stage-note"></div>
     </div>
+    <!-- The synth's display, built by js/lcd.js. The PG-300 view has one of its
+         own, drawn into the panel, so this one belongs to the grid. -->
+    <div id="lcd-host" class="lcd-host"></div>
     <div id="grid" class="grid"></div>
     <p id="grid-empty" class="empty-hint" hidden>
       No knobs yet. Set the grid size, then click a cell and press <b>Learn</b>

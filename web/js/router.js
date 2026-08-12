@@ -29,6 +29,14 @@ export class Router {
     // is the physical thing; the sent values are keyed by parameter.
     this.ccPositions = new Map();
 
+    // What the synth has told us about itself: the parameters whose value came
+    // from the synth rather than from something we sent, and the tone it named
+    // when it did. Cleared per parameter as soon as we send that parameter, at
+    // which point our value is the newer of the two.
+    this.fromSynth = new Set();
+    this.toneName = '';
+    this.patch = null;            // program number from a program change, or null
+
     // Which knobs have actually taken effect since the layer last changed.
     // Straight after a switch this is empty: every knob is physically pointing
     // at a value that belonged to the previous layer and none of them mean
@@ -54,6 +62,9 @@ export class Router {
     this.pending.clear();
     this.lastValue.clear();
     this.sentOnLayer.clear();
+    this.fromSynth.clear();
+    this.toneName = '';
+    this.patch = null;
     this.layer = this.cfg.startupLayer - 1;
   }
 
@@ -155,6 +166,51 @@ export class Router {
     return true;
   }
 
+  // --- what the synth tells us -----------------------------------------------
+
+  /**
+   * Adopt a whole patch the synth has just announced.
+   *
+   * This is the one place where a value on screen comes from somewhere other than
+   * a message we sent, and it outranks everything we know: the synth has just
+   * loaded 36 parameters and ours is at best a record of what it used to have.
+   *
+   * Anything still queued is dropped. Those messages were aimed at the patch that
+   * has just been replaced, and letting them go out would edit the new one a few
+   * milliseconds after it arrived -- the classic "my patch changes itself when I
+   * load it" fault, and a miserable one to diagnose from the outside.
+   *
+   * Note what is *not* touched: ccPositions, which is where the pots are. The
+   * pots have not moved. Drawing the knobs where the synth's values put them is
+   * the display's business and it is done from these values; writing invented
+   * positions in here would lose the one record of where the controller really
+   * is, and every layer change afterwards would draw from the invention.
+   */
+  applyTone(values, { name = '' } = {}) {
+    this.pending.clear();
+    this.toneName = name;
+    values.forEach((value, index) => this.remember(index, value));
+  }
+
+  /** Adopt one parameter, as sent when the synth's own panel is edited. */
+  applyParam(index, value) {
+    if (!aj.PARAMETERS[index]) throw new Error(`no such parameter: ${index}`);
+    this.pending.delete(index);
+    this.remember(index, value);
+  }
+
+  remember(index, value) {
+    const param = aj.PARAMETERS[index];
+    if (!param) return;
+    this.lastValue.set(index, Math.max(0, Math.min(param.maxValue, value)));
+    this.fromSynth.add(index);
+  }
+
+  /** The program number the synth last reported switching to. */
+  setPatch(program) {
+    this.patch = program;
+  }
+
   /**
    * Send an untranslated message straight out, ahead of the sysex queue.
    *
@@ -194,6 +250,7 @@ export class Router {
                                 this.cfg.levelByte, this.cfg.groupByte);
     if (!this.dryRun && this.hooks.send) this.hooks.send(frame);
     this.lastValue.set(index, value);
+    this.fromSynth.delete(index);
     this.lastSend = now;
 
     if (this.hooks.log) {
