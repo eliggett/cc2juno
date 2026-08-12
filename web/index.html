@@ -237,6 +237,17 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
       <section class="panel log-panel">
         <h2>
           Activity
+          <!-- Panel lamps, lit by js/app.js. Green is MIDI coming in, red is
+               MIDI going out, the way the sockets on the back of a synth are
+               usually marked. -->
+          <span class="leds">
+            <span id="led-in" class="led led-rx" title="MIDI from the controller">
+              <span class="led-dot"></span>Ctrl</span>
+            <span id="led-synth" class="led led-rx" title="MIDI from the synth">
+              <span class="led-dot"></span>Synth</span>
+            <span id="led-out" class="led led-tx" title="MIDI to the synth">
+              <span class="led-dot"></span>To synth</span>
+          </span>
           <button id="log-clear" class="quiet small">Clear</button>
         </h2>
         <label class="hint">

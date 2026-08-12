@@ -59,6 +59,15 @@ boundary dead zone and the same newest-value-wins queue as the CLI. Knobs light
 as they move and show what they are sending, the layer name is shown above the
 grid, and the log on the right prints the same lines the terminal build prints.
 
+Three lamps in the Activity heading show the traffic itself: green for MIDI
+arriving from the controller and from the synth, red for MIDI going out to the
+synth. They answer a question the log cannot, because they light on *any* message
+— unmapped, wrong channel, or something this program has no use for. A dark
+**Ctrl** lamp while you are turning a knob means the cable or the port menu is
+wrong, and it says so before a single knob has been mapped. Clock and active
+sensing are the one exception: an Alpha Juno sends active sensing the whole time
+it is powered up, so counting it would just hold the lamp on.
+
 **Hide status** puts that right-hand panel away and gives the whole window to
 the knobs or the PG-300; **Show status** brings it back. Only Perform offers it.
 Configure keeps the panel whatever this was last set to, because in that mode it

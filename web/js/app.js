@@ -45,7 +45,9 @@ const ports = new MidiPorts();
 const synthStream = new SysexStream();
 const detector = new MoveDetector(LEARN_MOVE_THRESHOLD);
 const router = new Router(state.cfg, {
-  send: (bytes) => ports.send(bytes),
+  // Everything this program transmits goes through here -- sysex, and thru's
+  // forwarded notes -- so this is the one place the transmit lamp needs lighting.
+  send: (bytes) => { if (ports.output) blink('led-out'); ports.send(bytes); },
   log: (entry) => logEntry(entry),
   onKnob: (event) => onKnobActivity(event),
   onSent: () => { if (state.mode === 'perform') refreshStage(); },
@@ -53,6 +55,38 @@ const router = new Router(state.cfg, {
 });
 
 const seenWrongChannel = new Set();   // synth channels complained about, once each
+
+// ------------------------------------------------------- activity lamps ---
+
+/**
+ * The three panel lamps, lit by traffic rather than by anything we make of it.
+ *
+ * A message counts whether it is mapped, on the wrong channel, or something this
+ * program has no use for at all. That is the point of them: a dark lamp says the
+ * cable is in the wrong socket, and it has to say so before a single knob has
+ * been mapped, which is exactly when the log has nothing to show.
+ */
+const LED_HOLD_MS = 60;
+const ledTimers = new Map();
+
+function blink(id) {
+  const node = $(id);
+  if (!node || !node.classList) return;
+  node.classList.add('is-lit');
+  clearTimeout(ledTimers.get(id));
+  ledTimers.set(id, setTimeout(() => node.classList.remove('is-lit'), LED_HOLD_MS));
+}
+
+/**
+ * Clock and active sensing arrive several times a second whether or not anyone
+ * is playing -- an Alpha Juno sends active sensing the whole time it is switched
+ * on -- so counting them would hold a lamp permanently on and tell you nothing.
+ * Everything else counts, including the middle of a split sysex message, whose
+ * fragments start on a data byte.
+ */
+function worthLighting(data) {
+  return data.length > 0 && data[0] < 0xF8;
+}
 
 let knobs = [];
 let panel = null;         // the PG-300, built the first time it is asked for
@@ -219,8 +253,16 @@ async function enableMidi() {
     await ports.open();
     localStorage.setItem(GRANTED_KEY, '1');
     ports.onPortsChanged = () => { fillPortMenus(); refresh(); };
-    ports.onMessage = (data) => onMidiMessage(data);
-    ports.onSynthMessage = (data) => onSynthMessage(data);
+    // The lamps come first, and unconditionally: onMidiMessage drops some of
+    // what it is given, and the lamp should still say the bytes arrived.
+    ports.onMessage = (data) => {
+      if (worthLighting(data)) blink('led-in');
+      onMidiMessage(data);
+    };
+    ports.onSynthMessage = (data) => {
+      if (worthLighting(data)) blink('led-synth');
+      onSynthMessage(data);
+    };
     $('midi-enable').hidden = true;
     fillPortMenus();
     autoSelectPorts();
