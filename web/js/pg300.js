@@ -107,8 +107,14 @@ const UNIT = 'unit';
 // number the rung is left bare and the readout names the value instead.
 export const LAYOUT = [
   // ---- LFO and DCO, top row
-  { param: 24, cx: 59.50, top: 79.63, len: 63.78, labelY: 75.11, label: ['RATE'], ticks: UNIT },
-  { param: 25, cx: 80.28, top: 79.63, len: 63.78, labelY: 74.85, label: ['DELAY'], ticks: UNIT },
+  //
+  // The two LFO sliders are shifted left by 8, the same as the VCA ones below
+  // and for the same reason: see the note there. Exact centring wants 7.57, but
+  // RATE and VCA's LEVEL were drawn in one column and 8 keeps them in it, at the
+  // cost of leaving this box's contents 0.4 units -- under a pixel -- left of
+  // centre.
+  { param: 24, cx: 51.50, top: 79.63, len: 63.78, labelY: 75.11, label: ['RATE'], ticks: UNIT },
+  { param: 25, cx: 72.28, top: 79.63, len: 63.78, labelY: 74.85, label: ['DELAY'], ticks: UNIT },
   { param: 6, cx: 109.81, top: 79.63, len: 43.39, labelY: 74.14, label: ['RANGE'],
     ticks: ["4'", "8'", "16'", "32'"] },
   { param: 11, cx: 135.43, top: 79.63, len: 63.78, labelY: 74.14, label: ['LFO'], ticks: UNIT },
@@ -151,10 +157,17 @@ export const LAYOUT = [
   { param: 21, cx: 434.53, top: 183.10, len: 63.78, labelY: 173.99, label: ['AFTER'], ticks: UNIT },
 
   // ---- VCA and chorus
-  { param: 22, cx: 59.50, top: 285.87, len: 63.78, labelY: 280.05, label: ['LEVEL'], ticks: UNIT },
-  { param: 2, cx: 92.43, top: 285.87, len: 43.00, labelY: 276.62, label: ['ENV', 'MODE'],
+  //
+  // The three VCA sliders sit 8 units left of where the drawing put them, which
+  // centres what they actually occupy -- caps, labels and the 0-5-10 numerals
+  // hanging off the left of the tracks -- in the box. As drawn, the group ran
+  // from 48.2 to 128.7 in a box centred on 80.5, so AFTER's label all but
+  // touched the CHORUS divider while there was a column of empty panel to the
+  // left of LEVEL's numerals.
+  { param: 22, cx: 51.50, top: 285.87, len: 63.78, labelY: 280.05, label: ['LEVEL'], ticks: UNIT },
+  { param: 2, cx: 84.43, top: 285.87, len: 43.00, labelY: 276.62, label: ['ENV', 'MODE'],
     ticks: ['', '', '', ''] },
-  { param: 23, cx: 118.96, top: 285.87, len: 63.78, labelY: 280.38, label: ['AFTER'], ticks: UNIT },
+  { param: 23, cx: 110.96, top: 285.87, len: 63.78, labelY: 280.38, label: ['AFTER'], ticks: UNIT },
   // The chorus switch keeps the artwork's ON/OFF beside it instead of a label
   // above it, which is why this one has no label lines of its own.
   { param: 10, cx: 152.16, top: 327.30, len: 22.22, labelY: 0, label: [], ticks: ['', ''] },
