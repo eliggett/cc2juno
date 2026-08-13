@@ -78,6 +78,30 @@ const LCD = {
   inset: 6,         // from the left of the screen to the first character
 };
 
+/**
+ * The mark beside the wordmark, and the lockup the two of them make.
+ *
+ * `ink` is how much of the image the drawing actually fills: the artwork is a
+ * square canvas with transparent margins, so spacing off the file's own edges
+ * would leave a gap half again as wide as it looks. The margins are even, top to
+ * bottom and side to side, which is why only the width needs correcting for --
+ * the image box centres itself on `midY` for free.
+ *
+ * `wordmarkWidth` is only a first guess at how wide "cc2juno" will come out, used
+ * to place the pair before anything has been measured. There is no @font-face
+ * behind the panel's condensed stack, so the real width depends on what the
+ * machine has installed; placeLogo() measures it and puts both parts where they
+ * belong. Guessing and leaving it would overlap the mark on a wide fallback.
+ */
+const MARK = {
+  size: 30,             // the image box; a bit taller than the word beside it
+  ink: 204 / 256,       // how wide the drawing is inside that box
+  gap: 8,               // from the drawing's edge to the first letter
+  midY: 89.5,           // level with the word, between its baseline and its top
+  wordmarkWidth: 88,
+  baseline: 98,
+};
+
 // The visible area. Everything is drawn in the drawing's coordinates and the
 // viewBox crops to the part that matters, so a measurement taken off the
 // artwork still pastes straight in even though the panel is no longer the size
@@ -325,22 +349,49 @@ export class Pg300Panel {
   /**
    * The top right of the panel, where Roland put their logo.
    *
-   * A placeholder until there is a real one: replace the contents of this group
-   * and nothing else has to move. The area is the whole rectangle the panel's
-   * outline steps around -- x from the DCO box's right edge to the panel's, y
-   * from the top down to where the VCF section starts.
+   * The area is the whole rectangle the panel's outline steps around -- x from
+   * the DCO box's right edge to the panel's, y from the top down to where the
+   * VCF section starts. Mark and word are centred on it as one lockup, rather
+   * than the word keeping the centre it had on its own and the mark hanging off
+   * the left of it.
    */
   buildLogo() {
     const cx = (FRAME.dcoRight + FRAME.right) / 2;
     const logo = element('g', { class: 'pg300-logo', id: 'pg300-logo' });
-    logo.append(
-      text('cc2juno', { class: 'pg300-wordmark', x: cx, y: 98, 'text-anchor': 'middle' }),
-      text('PROGRAMMER FOR ALPHA JUNO', {
-        class: 'pg300-wordmark-sub', x: cx, y: 114, 'text-anchor': 'middle',
-      }),
-    );
+
+    this.mark = element('image', {
+      class: 'pg300-mark',
+      y: MARK.midY - MARK.size / 2,
+      width: MARK.size,
+      height: MARK.size,
+      href: 'Logo/logo_transparent.png',
+    });
+    // Anchored at its left edge, so that however wide the word turns out the gap
+    // to the mark is the gap asked for and the word grows away from it.
+    this.wordmark = text('cc2juno', {
+      class: 'pg300-wordmark', y: MARK.baseline, 'text-anchor': 'start',
+    });
+
+    logo.append(this.mark, this.wordmark, text('PROGRAMMER FOR ALPHA JUNO', {
+      class: 'pg300-wordmark-sub', x: cx, y: 114, 'text-anchor': 'middle',
+    }));
     this.svg.append(logo);
+    this.placeLogo(MARK.wordmarkWidth);
     this.buildLcd(cx);
+  }
+
+  /**
+   * Centre mark and word on the logo area as one lockup, for a word `width`
+   * wide. Called once with a guess so that the first paint is not empty, then
+   * again from fit() with the measurement.
+   */
+  placeLogo(width) {
+    const cx = (FRAME.dcoRight + FRAME.right) / 2;
+    const inkWidth = MARK.size * MARK.ink;
+    const inkLeft = cx - (inkWidth + MARK.gap + width) / 2;
+    // The transparent margin, put back: the box is wider than the drawing in it.
+    this.mark.setAttribute('x', (inkLeft - (MARK.size - inkWidth) / 2).toFixed(2));
+    this.wordmark.setAttribute('x', (inkLeft + inkWidth + MARK.gap).toFixed(2));
   }
 
   /** The screen, centred under the wordmark. See LCD for how it is placed. */
@@ -517,6 +568,9 @@ export class Pg300Panel {
       label.setAttribute('textLength', max);
       label.setAttribute('lengthAdjust', 'spacingAndGlyphs');
     }
+    // Same measurement, same moment: the wordmark is set in the same stack and
+    // is the same guess until the face it actually got can be measured.
+    if (this.fitted) this.placeLogo(this.wordmark.getComputedTextLength());
   }
 
   place(slider, fraction) {
