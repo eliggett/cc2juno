@@ -47,7 +47,7 @@ const detector = new MoveDetector(LEARN_MOVE_THRESHOLD);
 const router = new Router(state.cfg, {
   // Everything this program transmits goes through here -- sysex, and thru's
   // forwarded notes -- so this is the one place the transmit lamp needs lighting.
-  send: (bytes) => { if (ports.output) blink('led-out'); ports.send(bytes); },
+  send: (bytes) => { if (ports.output) blink('out'); ports.send(bytes); },
   log: (entry) => logEntry(entry),
   onKnob: (event) => onKnobActivity(event),
   onSent: () => { if (state.mode === 'perform') refreshStage(); },
@@ -68,13 +68,31 @@ const seenWrongChannel = new Set();   // synth channels complained about, once e
  */
 const LED_HOLD_MS = 60;
 const ledTimers = new Map();
+const ledNodes = new Map();
 
-function blink(id) {
-  const node = $(id);
-  if (!node || !node.classList) return;
-  node.classList.add('is-lit');
-  clearTimeout(ledTimers.get(id));
-  ledTimers.set(id, setTimeout(() => node.classList.remove('is-lit'), LED_HOLD_MS));
+/**
+ * The same lamp is drawn in more than one place -- once beside its port in the
+ * top bar and once, named in words, in the Activity panel -- so a lamp is found
+ * by data-led rather than by id, and every copy of it lights at once.
+ */
+function ledsFor(name) {
+  let nodes = ledNodes.get(name);
+  if (!nodes) {
+    nodes = [...document.querySelectorAll(`[data-led="${name}"]`)];
+    // Nothing found means the page is not built yet; do not cache the emptiness.
+    if (nodes.length) ledNodes.set(name, nodes);
+  }
+  return nodes;
+}
+
+function blink(name) {
+  const nodes = ledsFor(name);
+  if (!nodes.length) return;
+  for (const node of nodes) node.classList.add('is-lit');
+  clearTimeout(ledTimers.get(name));
+  ledTimers.set(name, setTimeout(() => {
+    for (const node of nodes) node.classList.remove('is-lit');
+  }, LED_HOLD_MS));
 }
 
 /**
@@ -256,11 +274,11 @@ async function enableMidi() {
     // The lamps come first, and unconditionally: onMidiMessage drops some of
     // what it is given, and the lamp should still say the bytes arrived.
     ports.onMessage = (data) => {
-      if (worthLighting(data)) blink('led-in');
+      if (worthLighting(data)) blink('in');
       onMidiMessage(data);
     };
     ports.onSynthMessage = (data) => {
-      if (worthLighting(data)) blink('led-synth');
+      if (worthLighting(data)) blink('synth');
       onSynthMessage(data);
     };
     $('midi-enable').hidden = true;

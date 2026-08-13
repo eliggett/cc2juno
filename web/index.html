@@ -23,15 +23,23 @@
     <span>MIDI CC &rarr; Alpha Juno sysex</span>
   </div>
 
+  <!-- The lamps here are the same three as in the Activity panel, lit by the
+       same code: a lamp is any element carrying data-led, and every element with
+       a given data-led value blinks together. The panel spells its lamps out in
+       words; up here the port each one belongs to is already named alongside it,
+       so these are bare dots. -->
   <div class="ports">
     <label>From Controller:
+      <span class="led led-rx" data-led="in" title="MIDI from the controller"><span class="led-dot"></span></span>
       <select id="midi-in"><option value="">&mdash;</option></select>
     </label>
     <label>To Synth:
+      <span class="led led-tx" data-led="out" title="MIDI to the synth"><span class="led-dot"></span></span>
       <select id="midi-out"><option value="">&mdash;</option></select>
     </label>
     <label title="The synth's own MIDI out. An Alpha Juno announces every patch
 change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
+      <span class="led led-rx" data-led="synth" title="MIDI from the synth"><span class="led-dot"></span></span>
       <select id="midi-synth-in"><option value="">&mdash;</option></select>
     </label>
     <button id="midi-enable" class="primary">Enable MIDI</button>
@@ -241,11 +249,11 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
                MIDI going out, the way the sockets on the back of a synth are
                usually marked. -->
           <span class="leds">
-            <span id="led-in" class="led led-rx" title="MIDI from the controller">
+            <span class="led led-rx" data-led="in" title="MIDI from the controller">
               <span class="led-dot"></span>FromCtrl</span>
-            <span id="led-synth" class="led led-rx" title="MIDI from the synth">
+            <span class="led led-rx" data-led="synth" title="MIDI from the synth">
               <span class="led-dot"></span>FromSynth</span>
-            <span id="led-out" class="led led-tx" title="MIDI to the synth">
+            <span class="led led-tx" data-led="out" title="MIDI to the synth">
               <span class="led-dot"></span>ToSynth</span>
           </span>
           <button id="log-clear" class="quiet small">Clear</button>
