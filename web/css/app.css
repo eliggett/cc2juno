@@ -94,6 +94,12 @@ body {
   border-radius: 999px;
   padding: 6px 16px;
 }
+/* A mode that is only named, not built. It keeps the shape of its neighbours so
+   the row reads as one set, and the dashed edge says the room is empty. */
+.modes button:disabled, .modes button:disabled:hover {
+  background: transparent;
+  border-style: dashed;
+}
 .modes button.is-active {
   background: var(--accent);
   border-color: var(--accent);
@@ -128,6 +134,16 @@ button, select, input[type="number"], input[type="text"] {
 button { cursor: pointer; }
 button:hover { border-color: #3a444c; background: #222a31; }
 button:active { transform: translateY(1px); }
+/* Greyed out because there is nothing to act on yet -- a button that will come
+   back by itself, unlike the mode bar's placeholder further down. */
+button:disabled, button:disabled:hover {
+  cursor: default;
+  color: var(--dim);
+  border-color: var(--line);
+  background: var(--raised);
+  transform: none;
+}
+button.quiet:disabled, button.quiet:disabled:hover { background: transparent; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #211505; font-weight: 600; }
 button.primary:hover { background: #ffc073; }
 button.quiet { background: transparent; color: var(--muted); }

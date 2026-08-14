@@ -22,10 +22,11 @@
 # Default MIDI ports, so the program can start without prompting. Each may be
 # a port name, any distinctive part of one, or a port index. Use 'ask' to be
 # prompted. --in/--out override these; --ask-ports ignores them.
-# Tip: after picking ports interactively, run with --save-ports to store them.
+# These were written by the web version, which names ports the way the browser
+# does; the CLI matches on any distinctive part, so they usually suit both.
 ports:
-  input: "4ACBCC15:4ACBCC15 MIDI 1 32:0"
-  output: "UA-25:UA-25 MIDI 1 36:0"
+  input: "4ACBCC15 MIDI 1"
+  output: "UA-25 MIDI 1"
 
 midi:
   synth_channel: 1        # Alpha Juno basic channel, 1-16
@@ -52,6 +53,14 @@ midi:
   # consumed and never forwarded. --thru / --no-thru override this.
   thru: false
 
+# Physical arrangement of the knobs, for the web front-end. Row-major,
+# one entry per cell, 'off' where there is no knob. The other builds do not
+# draw anything but do keep this section intact when they rewrite the file.
+layout:
+  rows: 3
+  cols: 5
+  ccs: "15, 2, 9, 6, 3, 11, 13, 10, 7, 4, 12, 14, 1, 8, 5"
+
 # Layering. One knob picks which set of assignments the other knobs use,
 # by cutting its 0-127 travel into one region per layer. The layer knob
 # itself means the same thing on every layer and can never be mapped to a
@@ -61,27 +70,28 @@ midi:
 layers:
   cc: 5
   count: 3
+  names: "Oscillators, Env, Filter"    # comma separated, for the log only
   startup: 1      # layer to assume until the knob is moved
 
-layer1:
-  "DCO Env. Mode":  15   # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic
-  "VCF Env. Mode":  2    # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic | NB: CC2 is normally Breath Controller
-  "VCA Env. Mode":  9    # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic
-  "DCO Wave Pulse": 6    # #3 | 0..3 | NB: CC6 is normally Data Entry MSB
-  "DCO Wave Saw":   3    # #4 | 0..5
-  "DCO Wave Sub":   11   # #5 | 0..5 | NB: CC11 is normally Expression
-  "DCO Range":      13   # #6 | 0=4', 1=8', 2=16', 3=32' | NB: CC13 is normally Effect Control 2
-  "DCO Sub Level":  10   # #7 | 0..3 | NB: CC10 is normally Pan
-  "DCO Noise":      7    # #8 | 0..3 | NB: CC7 is normally Channel Volume
-  "HPF Cutoff":     4    # #9 | 0..3 | NB: CC4 is normally Foot Controller
-  "Chorus Switch":  12   # #10 | 0=Off, 1=On | NB: CC12 is normally Effect Control 1
-  "DCO LFO Mod.":   off  # #11 | 0..127
-  "DCO ENV Mod.":   off  # #12 | 0..127
+layer1:    # Oscillators
+  "DCO Env. Mode":  12   # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic | NB: CC12 is normally Effect Control 1
+  "VCF Env. Mode":  off  # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic
+  "VCA Env. Mode":  off  # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic
+  "DCO Wave Pulse": 2    # #3 | 0..3 | NB: CC2 is normally Breath Controller
+  "DCO Wave Saw":   9    # #4 | 0..5
+  "DCO Wave Sub":   6    # #5 | 0..5 | NB: CC6 is normally Data Entry MSB
+  "DCO Range":      15   # #6 | 0=4', 1=8', 2=16', 3=32'
+  "DCO Sub Level":  3    # #7 | 0..3
+  "DCO Noise":      11   # #8 | 0..3 | NB: CC11 is normally Expression
+  "HPF Cutoff":     off  # #9 | 0..3
+  "Chorus Switch":  off  # #10 | 0=Off, 1=On
+  "DCO LFO Mod.":   14   # #11 | 0..127
+  "DCO ENV Mod.":   7    # #12 | 0..127 | NB: CC7 is normally Channel Volume
   "DCO After Mod.": off  # #13 | 0..127
-  "DCO PWM Depth":  off  # #14 | 0..127
-  "DCO PWM Rate":   off  # #15 | 0..127 | 0 = pulse width manual, 1..127 = PW LFO rate
-  "VCF Cutoff":     1    # #16 | 0..127 | NB: CC1 is normally Modulation Wheel
-  "VCF Resonance":  8    # #17 | 0..127 | NB: CC8 is normally Balance
+  "DCO PWM Depth":  13   # #14 | 0..127 | NB: CC13 is normally Effect Control 2
+  "DCO PWM Rate":   10   # #15 | 0..127 | 0 = pulse width manual, 1..127 = PW LFO rate | NB: CC10 is normally Pan
+  "VCF Cutoff":     off  # #16 | 0..127
+  "VCF Resonance":  off  # #17 | 0..127
   "VCF LFO Mod.":   off  # #18 | 0..127
   "VCF ENV Mod.":   off  # #19 | 0..127
   "VCF Key Follow": off  # #20 | 0..127
@@ -101,48 +111,10 @@ layer1:
   "Chorus Rate":    off  # #34 | 0..127
   "Bender Range":   off  # #35 | 0..12
 
-layer2:
+layer2:    # Env
   "DCO Env. Mode":  off  # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic
   "VCF Env. Mode":  off  # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic
-  "VCA Env. Mode":  off  # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic
-  "DCO Wave Pulse": off  # #3 | 0..3
-  "DCO Wave Saw":   off  # #4 | 0..5
-  "DCO Wave Sub":   off  # #5 | 0..5
-  "DCO Range":      off  # #6 | 0=4', 1=8', 2=16', 3=32'
-  "DCO Sub Level":  off  # #7 | 0..3
-  "DCO Noise":      off  # #8 | 0..3
-  "HPF Cutoff":     off  # #9 | 0..3
-  "Chorus Switch":  off  # #10 | 0=Off, 1=On
-  "DCO LFO Mod.":   15   # #11 | 0..127
-  "DCO ENV Mod.":   2    # #12 | 0..127 | NB: CC2 is normally Breath Controller
-  "DCO After Mod.": 9    # #13 | 0..127
-  "DCO PWM Depth":  6    # #14 | 0..127 | NB: CC6 is normally Data Entry MSB
-  "DCO PWM Rate":   3    # #15 | 0..127 | 0 = pulse width manual, 1..127 = PW LFO rate
-  "VCF Cutoff":     off  # #16 | 0..127
-  "VCF Resonance":  off  # #17 | 0..127
-  "VCF LFO Mod.":   11   # #18 | 0..127 | NB: CC11 is normally Expression
-  "VCF ENV Mod.":   13   # #19 | 0..127 | NB: CC13 is normally Effect Control 2
-  "VCF Key Follow": 10   # #20 | 0..127 | NB: CC10 is normally Pan
-  "VCF Aftertouch": 7    # #21 | 0..127 | NB: CC7 is normally Channel Volume
-  "VCA Level":      4    # #22 | 0..127 | NB: CC4 is normally Foot Controller
-  "VCA Aftertouch": 12   # #23 | 0..127 | NB: CC12 is normally Effect Control 1
-  "LFO Rate":       14   # #24 | 0..127
-  "LFO Delay":      1    # #25 | 0..127 | NB: CC1 is normally Modulation Wheel
-  "ENV T1":         8    # #26 | 0..127 | attack time | NB: CC8 is normally Balance
-  "ENV L1":         off  # #27 | 0..127 | attack level
-  "ENV T2":         off  # #28 | 0..127 | break time
-  "ENV L2":         off  # #29 | 0..127 | break level
-  "ENV T3":         off  # #30 | 0..127 | decay time
-  "ENV L3":         off  # #31 | 0..127 | sustain level
-  "ENV T4":         off  # #32 | 0..127 | release time
-  "ENV Key Follow": off  # #33 | 0..127
-  "Chorus Rate":    off  # #34 | 0..127
-  "Bender Range":   off  # #35 | 0..12
-
-layer3:
-  "DCO Env. Mode":  off  # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic
-  "VCF Env. Mode":  off  # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic
-  "VCA Env. Mode":  off  # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic
+  "VCA Env. Mode":  12   # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic | NB: CC12 is normally Effect Control 1
   "DCO Wave Pulse": off  # #3 | 0..3
   "DCO Wave Saw":   off  # #4 | 0..5
   "DCO Wave Sub":   off  # #5 | 0..5
@@ -162,17 +134,55 @@ layer3:
   "VCF ENV Mod.":   off  # #19 | 0..127
   "VCF Key Follow": off  # #20 | 0..127
   "VCF Aftertouch": off  # #21 | 0..127
-  "VCA Level":      off  # #22 | 0..127
+  "VCA Level":      7    # #22 | 0..127 | NB: CC7 is normally Channel Volume
   "VCA Aftertouch": off  # #23 | 0..127
   "LFO Rate":       off  # #24 | 0..127
   "LFO Delay":      off  # #25 | 0..127
-  "ENV T1":         off  # #26 | 0..127 | attack time
-  "ENV L1":         15   # #27 | 0..127 | attack level
+  "ENV T1":         15   # #26 | 0..127 | attack time
+  "ENV L1":         11   # #27 | 0..127 | attack level | NB: CC11 is normally Expression
   "ENV T2":         2    # #28 | 0..127 | break time | NB: CC2 is normally Breath Controller
-  "ENV L2":         9    # #29 | 0..127 | break level
-  "ENV T3":         6    # #30 | 0..127 | decay time | NB: CC6 is normally Data Entry MSB
-  "ENV L3":         3    # #31 | 0..127 | sustain level
-  "ENV T4":         11   # #32 | 0..127 | release time | NB: CC11 is normally Expression
-  "ENV Key Follow": 13   # #33 | 0..127 | NB: CC13 is normally Effect Control 2
-  "Chorus Rate":    10   # #34 | 0..127 | NB: CC10 is normally Pan
-  "Bender Range":   7    # #35 | 0..12 | NB: CC7 is normally Channel Volume
+  "ENV L2":         13   # #29 | 0..127 | break level | NB: CC13 is normally Effect Control 2
+  "ENV T3":         9    # #30 | 0..127 | decay time
+  "ENV L3":         10   # #31 | 0..127 | sustain level | NB: CC10 is normally Pan
+  "ENV T4":         6    # #32 | 0..127 | release time | NB: CC6 is normally Data Entry MSB
+  "ENV Key Follow": 3    # #33 | 0..127
+  "Chorus Rate":    off  # #34 | 0..127
+  "Bender Range":   off  # #35 | 0..12
+
+layer3:    # Filter
+  "DCO Env. Mode":  off  # #0 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Inverted-Dynamic
+  "VCF Env. Mode":  12   # #1 | 0=Normal, 1=Inverted, 2=Normal-Dynamic, 3=Dynamic | NB: CC12 is normally Effect Control 1
+  "VCA Env. Mode":  off  # #2 | 0=Normal, 1=Gate, 2=Normal-Dynamic, 3=Gate-Dynamic
+  "DCO Wave Pulse": off  # #3 | 0..3
+  "DCO Wave Saw":   off  # #4 | 0..5
+  "DCO Wave Sub":   off  # #5 | 0..5
+  "DCO Range":      off  # #6 | 0=4', 1=8', 2=16', 3=32'
+  "DCO Sub Level":  off  # #7 | 0..3
+  "DCO Noise":      off  # #8 | 0..3
+  "HPF Cutoff":     15   # #9 | 0..3
+  "Chorus Switch":  14   # #10 | 0=Off, 1=On
+  "DCO LFO Mod.":   off  # #11 | 0..127
+  "DCO ENV Mod.":   off  # #12 | 0..127
+  "DCO After Mod.": off  # #13 | 0..127
+  "DCO PWM Depth":  off  # #14 | 0..127
+  "DCO PWM Rate":   off  # #15 | 0..127 | 0 = pulse width manual, 1..127 = PW LFO rate
+  "VCF Cutoff":     2    # #16 | 0..127 | NB: CC2 is normally Breath Controller
+  "VCF Resonance":  9    # #17 | 0..127
+  "VCF LFO Mod.":   6    # #18 | 0..127 | NB: CC6 is normally Data Entry MSB
+  "VCF ENV Mod.":   3    # #19 | 0..127
+  "VCF Key Follow": 11   # #20 | 0..127 | NB: CC11 is normally Expression
+  "VCF Aftertouch": off  # #21 | 0..127
+  "VCA Level":      13   # #22 | 0..127 | NB: CC13 is normally Effect Control 2
+  "VCA Aftertouch": off  # #23 | 0..127
+  "LFO Rate":       10   # #24 | 0..127 | NB: CC10 is normally Pan
+  "LFO Delay":      7    # #25 | 0..127 | NB: CC7 is normally Channel Volume
+  "ENV T1":         off  # #26 | 0..127 | attack time
+  "ENV L1":         off  # #27 | 0..127 | attack level
+  "ENV T2":         off  # #28 | 0..127 | break time
+  "ENV L2":         off  # #29 | 0..127 | break level
+  "ENV T3":         off  # #30 | 0..127 | decay time
+  "ENV L3":         off  # #31 | 0..127 | sustain level
+  "ENV T4":         off  # #32 | 0..127 | release time
+  "ENV Key Follow": off  # #33 | 0..127
+  "Chorus Rate":    1    # #34 | 0..127 | NB: CC1 is normally Modulation Wheel
+  "Bender Range":   8    # #35 | 0..12 | NB: CC8 is normally Balance
