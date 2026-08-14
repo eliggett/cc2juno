@@ -78,7 +78,19 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
     </div>
     <!-- The synth's display, built by js/lcd.js. The PG-300 view has one of its
          own, drawn into the panel, so this one belongs to the grid. -->
-    <div id="lcd-host" class="lcd-host" hidden></div>
+    <div id="lcd-host" class="lcd-host" hidden>
+      <!-- The logo the PG-300 panel wears, put in the empty space to the left
+           of the display. It shares the display's cell rather than taking a
+           column of its own, so it takes no width away from it and the display
+           stays centred over the knobs; see .grid-logo in the stylesheet. The
+           display itself is appended after this by refreshLcd() in js/app.js. -->
+      <div class="grid-logo">
+        <span class="grid-logo-lockup">
+          <img class="grid-logo-mark" src="Logo/logo_transparent.png" alt="">
+          <span class="grid-logo-word">cc2juno</span>
+        </span>
+      </div>
+    </div>
     <div id="grid" class="grid" hidden></div>
     <p id="grid-empty" class="empty-hint" hidden>
       No knobs yet. Set the grid size, then click a cell and press <b>Learn</b>

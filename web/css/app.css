@@ -293,7 +293,69 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
 
 .lcd-host > .lcd {
   grid-column: 1 / -1;
+  /* Named rather than left to auto-placement: the logo below claims the whole
+   * of row 1, and an auto-placed display would be pushed down to a row of its
+   * own instead of sharing the cell with it. */
+  grid-row: 1;
   justify-self: center;
+}
+
+/* The same logo the PG-300 panel wears, in the space to the left of the
+ * display.
+ *
+ * It is laid over the display's cell instead of being given a column of its
+ * own. An item spanning the same tracks and put at the start of them sits to
+ * the left of a centred display without taking any width from it, so the
+ * display keeps the middle of the knobs however wide the logo turns out.
+ *
+ * The wrapper is stretched across the whole track area for one reason: it is
+ * the container the query below measures, and stretched it measures exactly the
+ * width of the knob grid, which is what decides whether the logo fits. The host
+ * itself is no good for that -- it is a block, so it is as wide as the stage
+ * whatever the grid is doing. */
+.lcd-host > .grid-logo {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  justify-self: stretch;
+  align-self: center;
+  container-type: inline-size;
+  pointer-events: none;      /* it lies over the display; do not eat its clicks */
+}
+
+/* Below this the display fills the middle and there is nothing left at the side
+ * to put a logo in, so it steps aside rather than sitting under the display.
+ * The width is the display's own plus room for the lockup twice over, which is
+ * the narrowest grid that still leaves the two of them clear of each other. */
+.grid-logo-lockup { display: none; }
+@container (min-width: 520px) {
+  .grid-logo-lockup { display: inline-flex; align-items: center; gap: 8px; }
+}
+
+.grid-logo-mark {
+  height: 30px;
+  width: auto;
+  display: block;
+  /* The artwork is a square canvas with transparent margins, so the file's edge
+   * sits well to the left of the drawing in it. Pulled back by half the margin,
+   * the ink starts where the first knob does. This is the correction placeLogo()
+   * in js/pg300.js makes for the same reason: space off the drawing, not off
+   * the file. Keep the two in step if the artwork is ever recut. */
+  margin-left: -3px;
+}
+
+/* The panel's wordmark, at a size that sits beside a display rather than across
+ * the top of a panel. Compacta is nobody's system font; see .pg300-svg text for
+ * what the stack is falling back through. */
+.grid-logo-word {
+  font-family: "Oswald", "Archivo Narrow", "Arial Narrow", "Liberation Sans Narrow",
+               "Helvetica Neue", var(--sans);
+  font-stretch: condensed;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 1px;
+  line-height: 1;
+  color: #dde5e9;
+  user-select: none;
 }
 
 .lcd {
