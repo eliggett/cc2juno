@@ -24,6 +24,7 @@
 
 import * as aj from './alpha_juno.js';
 import { displayText } from './lcd.js';
+import { GLYPHS } from './pg300_glyphs.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -121,14 +122,69 @@ const RUNG = 6;                           // half-width of a scale rung
 const LINE_HEIGHT = 6.4;                  // the artwork's own label leading
 const MAX_LABEL = 20;                     // a label may not be wider than its column
 
+/**
+ * The pictures beside the stepped sliders -- waveforms and envelope shapes,
+ * from js/pg300_glyphs.js, which tools/extract_panel_glyphs.py builds out of
+ * reference/panel_glyphs.
+ *
+ * `height` is what one cell comes out at on the panel, and it is the only size
+ * given: the sheets are all drawn on a cell of the same height, so one number
+ * scales the lot and every glyph on the panel comes out at one weight. It is
+ * set by the tightest fit rather than by taste. SAW has PULSE on one side and
+ * SUB on the other, 27.84 units apart, which leaves 16.8 between the two caps;
+ * a cell this tall is 14.7 wide and goes in with under a unit to spare. Going
+ * bigger has to start by moving a slider, and the sliders are where Roland put
+ * them.
+ *
+ * It also settles the line weight, which is the happy part. The drawings are
+ * stroked at 4 units, and 4 shrunk by this much lands at 0.66 -- the panel's
+ * own rungs are 0.7. The artwork arrives at the weight of the engraving with
+ * nothing to correct.
+ */
+const GLYPH = {
+  height: 9.2,          // one cell, in panel units; see above before changing
+  gap: 1.2,             // from the cap's edge to the near edge of the cell
+};
+
+/**
+ * The DYNAMICS tie: the bracket that gathers the lower two positions of an ENV
+ * MODE switch and runs a leader down to the word.
+ *
+ * Roland draws this on all three ENV MODE sliders (see reference/
+ * Roland_PG-300_BIG.png) because the four positions are really two pairs -- the
+ * same two envelope shapes, once flat and once responding to how hard the key
+ * is played -- and the pictures alone cannot say so, the dynamic pair being
+ * drawn identically to the plain one.
+ *
+ * The panel puts it to the right of DCO's and VCF's sliders and to the left of
+ * VCA's. All three go right here: the glyph column has taken the left, and on
+ * this drawing VCA ENV MODE has only six units between its glyphs and the LEVEL
+ * slider, against fifteen on its right.
+ *
+ * The word hangs below the track rather than beside it, as on the panel, which
+ * is the only place a nine-letter word fits in a column this narrow. It is set
+ * in the tick numerals' grey: this is legend, not a control.
+ */
+const DYNAMICS = {
+  gap: 0.9,             // from the cap's edge to where the arms start
+  arm: 3.2,             // arm length, i.e. how far out the spine stands
+  drop: 13,             // from the foot of the track down to the leader
+  lead: 2,              // how far past the slider's middle the leader runs
+  space: 1.6,           // between the end of the leader and the word
+  maxWidth: 19,         // squeezed to this if the condensed font is missing
+};
+
 // A 0..127 parameter, marked 0-5-10 down the side the way the hardware is.
 const UNIT = 'unit';
 
 // The sliders, in reading order down the panel. `ticks` is either UNIT or one
-// label per step from the bottom up, where '' draws the rung without a numeral.
+// label per step in value order, where '' draws the rung without a numeral;
+// that order runs up the track, or down it on a slider marked `flip`.
 // The stepped scales come off the panel of an MKS-50 programmer (see
 // reference/bigctrlr2.jpg); where its legend is a waveform glyph rather than a
-// number the rung is left bare and the readout names the value instead.
+// number the rung is left bare and the picture comes from GLYPHS instead, keyed
+// by parameter. `glyphSide` says which side of the track those go, and defaults
+// to the left, where the numerals would otherwise be.
 export const LAYOUT = [
   // ---- LFO and DCO, top row
   //
@@ -140,11 +196,14 @@ export const LAYOUT = [
   { param: 24, cx: 51.50, top: 79.63, len: 63.78, labelY: 75.11, label: ['RATE'], ticks: UNIT },
   { param: 25, cx: 72.28, top: 79.63, len: 63.78, labelY: 74.85, label: ['DELAY'], ticks: UNIT },
   { param: 6, cx: 109.81, top: 79.63, len: 43.39, labelY: 74.14, label: ['RANGE'],
-    ticks: ["4'", "8'", "16'", "32'"] },
+    ticks: ["4'", "8'", "16'", "32'"], flip: true },
   { param: 11, cx: 135.43, top: 79.63, len: 63.78, labelY: 74.14, label: ['LFO'], ticks: UNIT },
   { param: 12, cx: 156.21, top: 79.63, len: 63.78, labelY: 74.14, label: ['ENV'], ticks: UNIT },
+  // `dynamics` is the values the DYNAMICS bracket gathers. All three ENV MODE
+  // switches read as two pairs -- Normal and Inverted, then the same two again
+  // responding to key velocity -- and it is always the upper pair of values.
   { param: 0, cx: 198.95, top: 79.63, len: 43.00, labelY: 70.93, label: ['ENV', 'MODE'],
-    ticks: ['', '', '', ''] },
+    ticks: ['', '', '', ''], flip: true, dynamics: [2, 3] },
   { param: 13, cx: 224.44, top: 79.63, len: 63.78, labelY: 74.14, label: ['AFTER'], ticks: UNIT },
 
   // ---- DCO waveforms and PWM, second row
@@ -156,8 +215,13 @@ export const LAYOUT = [
   // the next section over already sit this way, to within a third of a unit.
   { param: 4, cx: 87.20, top: 182.36, len: 63.78, labelY: 172.97, label: ['SAW', 'TOOTH'],
     ticks: ['OFF', '', '', '', '', ''] },
+  // The only glyph column that goes on the right. Two of the six sub waveforms
+  // are the low ones, drawn stretched out as they are on Roland's own panel, so
+  // this column is half as wide again as its neighbours -- and it is the third
+  // of three waveform sliders in a row, with no room left on its left. To its
+  // right SUB LEVEL starts lower down the panel and leaves 30 units clear.
   { param: 5, cx: 114.78, top: 182.36, len: 63.78, labelY: 176.17, label: ['SUB'],
-    ticks: ['', '', '', '', '', ''] },
+    ticks: ['', '', '', '', '', ''], glyphSide: 'right' },
   { param: 7, cx: 156.61, top: 202.35, len: 43.52, labelY: 189.68, label: ['SUB', 'LEVEL'],
     ticks: ['0', '1', '2', '3'] },
   // Level with SUB LEVEL next to it; the drawing had it 1.05 higher.
@@ -175,7 +239,7 @@ export const LAYOUT = [
   { param: 18, cx: 332.00, top: 181.62, len: 63.78, labelY: 174.38, label: ['LFO'], ticks: UNIT },
   { param: 19, cx: 353.57, top: 181.62, len: 63.78, labelY: 174.91, label: ['ENV'], ticks: UNIT },
   { param: 1, cx: 387.60, top: 181.65, len: 43.52, labelY: 172.31, label: ['ENV', 'MODE'],
-    ticks: ['', '', '', ''] },
+    ticks: ['', '', '', ''], flip: true, dynamics: [2, 3] },
   { param: 20, cx: 412.96, top: 183.10, len: 63.78, labelY: 171.69, label: ['KEY', 'FOLLOW'],
     ticks: UNIT },
   { param: 21, cx: 434.53, top: 183.10, len: 63.78, labelY: 173.99, label: ['AFTER'], ticks: UNIT },
@@ -190,7 +254,7 @@ export const LAYOUT = [
   // left of LEVEL's numerals.
   { param: 22, cx: 51.50, top: 285.87, len: 63.78, labelY: 280.05, label: ['LEVEL'], ticks: UNIT },
   { param: 2, cx: 84.43, top: 285.87, len: 43.00, labelY: 276.62, label: ['ENV', 'MODE'],
-    ticks: ['', '', '', ''] },
+    ticks: ['', '', '', ''], flip: true, dynamics: [2, 3] },
   { param: 23, cx: 110.96, top: 285.87, len: 63.78, labelY: 280.38, label: ['AFTER'], ticks: UNIT },
   // The chorus switch keeps the artwork's ON/OFF beside it instead of a label
   // above it, which is why this one has no label lines of its own.
@@ -256,11 +320,18 @@ function text(content, attributes) {
   return node;
 }
 
-/** Where a cap's centre sits for `fraction` of full travel, 0 at the bottom. */
+/**
+ * Where a cap's centre sits for `fraction` of full travel, 0 at the bottom --
+ * or at the top on a slider marked `flip`, which a few of the switches are.
+ *
+ * The cap, the rungs and the tick numerals all come through here, so a flipped
+ * slider flips whole and each numeral stays beside the position it names.
+ */
 function capCentre(entry, fraction) {
   const low = entry.top + entry.len - CAP_INSET;
   const high = entry.top + CAP_INSET;
-  return low - fraction * (low - high);
+  const travel = entry.flip ? 1 - fraction : fraction;
+  return low - travel * (low - high);
 }
 
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
@@ -477,6 +548,8 @@ export class Pg300Panel {
       }));
     }
     group.append(rungs);
+    this.buildGlyphs(entry, group);
+    this.buildDynamics(entry, group);
 
     group.append(element('rect', {
       class: 'pg300-track',
@@ -547,6 +620,92 @@ export class Pg300Panel {
   }
 
   /**
+   * The little pictures beside a stepped slider, one per position.
+   *
+   * A cell is drawn about its own middle, so a step is placed by putting that
+   * middle on the rung it belongs to; the whole column shares one x, taken from
+   * the widest cell so that a sheet with mixed widths -- the sub waveforms --
+   * still lines up down a common axis.
+   *
+   * The scale goes on the group rather than into the numbers, which is what
+   * keeps the two coordinate systems apart: everything inside is in the
+   * drawing's units, so the stylesheet's stroke-width and dashes are in the
+   * drawing's units too, and the artwork can be redrawn without a single number
+   * in here changing. See GLYPH above for how the size was arrived at.
+   */
+  buildGlyphs(entry, group) {
+    const sheet = GLYPHS[entry.param];
+    if (!sheet) return;
+
+    const [cellWidth, cellHeight] = sheet.cell;
+    const scale = GLYPH.height / cellHeight;
+    const reach = CAP_WIDTH / 2 + GLYPH.gap + (cellWidth * scale) / 2;
+    const x = entry.glyphSide === 'right' ? entry.cx + reach : entry.cx - reach;
+    const last = Math.max(1, sheet.steps.length - 1);
+
+    const column = element('g', { class: 'pg300-glyphs' });
+    sheet.steps.forEach((step, value) => {
+      // By value, not by position: capCentre already knows which way the slider
+      // runs, so a flipped slider carries its pictures round with it.
+      const y = capCentre(entry, value / last);
+      const cell = element('g', {
+        transform: `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${scale.toFixed(5)})`,
+      });
+      for (const d of step.ink) cell.append(element('path', { d }));
+      for (const d of step.ghost || []) {
+        cell.append(element('path', { class: 'pg300-glyph-ghost', d }));
+      }
+      column.append(cell);
+    });
+    group.append(column);
+  }
+
+  /**
+   * The bracket gathering an ENV MODE switch's dynamic positions, and its word.
+   *
+   * Three strokes and a leader: an arm out from the track at each of the two
+   * positions, a spine joining them and carrying on down past the foot of the
+   * track, and a leader turning back in to the word. Drawn here rather than
+   * taken from the glyph sheets, which have a bracket of their own: theirs is
+   * sized to the drawing and would want another eleven units of panel that two
+   * of these three sliders have not got, and the word wants to be in the panel's
+   * own face at the size the numerals are set in.
+   *
+   * The two positions are read from the entry rather than assumed to be the
+   * bottom two, and their ends are sorted, so this follows a slider that gets
+   * flipped instead of ending up upside down beside it.
+   */
+  buildDynamics(entry, group) {
+    if (!entry.dynamics) return;
+
+    const last = Math.max(1, entry.ticks.length - 1);
+    const ys = entry.dynamics.map((value) => capCentre(entry, value / last));
+    const near = Math.min(...ys);
+    const far = Math.max(...ys);
+
+    const armX = entry.cx + CAP_WIDTH / 2 + DYNAMICS.gap;
+    const spineX = armX + DYNAMICS.arm;
+    const leadY = entry.top + entry.len + DYNAMICS.drop;
+    const leadX = entry.cx + DYNAMICS.lead;
+
+    group.append(element('path', {
+      class: 'pg300-dynamics-tie',
+      d: `M ${armX} ${near.toFixed(2)} H ${spineX} `
+       + `M ${armX} ${far.toFixed(2)} H ${spineX} `
+       + `M ${spineX} ${near.toFixed(2)} V ${leadY} H ${leadX}`,
+    }));
+
+    group.append(text('DYNAMICS', {
+      class: 'pg300-dynamics pg300-fit',
+      'data-max': DYNAMICS.maxWidth,
+      x: leadX - DYNAMICS.space,
+      y: leadY,
+      'text-anchor': 'end',
+      'dominant-baseline': 'middle',
+    }));
+  }
+
+  /**
    * Squeeze any label wider than its column.
    *
    * The panel is set in Compacta, a condensed face nobody has, so a browser
@@ -590,8 +749,8 @@ export class Pg300Panel {
    * this layer can move it ('layer'), a knob on some other layer can ('other'),
    * or nothing on the controller can ('none').
    *
-   * A null value is drawn at the bottom of its travel but marked unknown, and it
-   * matters that those are two different things. With nothing heard from the
+   * A null value is drawn at the zero end of its travel but marked unknown, and
+   * it matters that those are two different things. With nothing heard from the
    * synth, a slider that has never been sent anything is not at zero -- we simply
    * have no idea where it is, and a fader has to be drawn somewhere.
    */
@@ -695,11 +854,14 @@ export class Pg300Panel {
     const startY = event.clientY;
     const startValue = slider.value === null ? 0 : slider.value;
     const steps = stepsOf(slider.param);
+    // The cap follows the pointer, so on a flipped slider dragging up is the
+    // value coming down.
+    const dir = slider.entry.flip ? -1 : 1;
 
     const move = (moveEvent) => {
       const fine = moveEvent.shiftKey ? 5 : 1;
       const travel = (startY - moveEvent.clientY) / fine;
-      this.emit(slider, startValue + (travel / travelPx) * steps);
+      this.emit(slider, startValue + (travel / travelPx) * steps * dir);
     };
 
     const up = (upEvent) => {
@@ -721,13 +883,16 @@ export class Pg300Panel {
    * a trackpad glides. A low-resolution parameter gets one step per notch, since
    * four steps of a four-position switch is the whole control.
    *
-   * Wheel towards you raises the value, away lowers it, as on the knobs.
+   * Wheel towards you raises the value, away lowers it, as on the knobs -- and
+   * the other way about on a flipped slider, so that whichever way the cap goes
+   * under a drag it goes the same way under the wheel.
    */
   onWheel(slider, event) {
     event.preventDefault();
     const perCount = event.deltaMode === 0 ? 25 : (event.deltaMode === 1 ? 0.75 : 0.25);
     const scale = aj.isContinuous(slider.param) ? 1 : 0.25;
-    let counts = (event.deltaY / perCount) * scale;
+    const dir = slider.entry.flip ? -1 : 1;
+    let counts = (event.deltaY / perCount) * scale * dir;
     if (event.shiftKey) counts /= 4;
     slider.wheelRemainder += counts;
 
@@ -745,9 +910,13 @@ export class Pg300Panel {
     if (!(event.key in steps)) return;
     event.preventDefault();
     const from = slider.value === null ? 0 : slider.value;
+    // As with a drag, the arrows move the cap rather than the number, so they
+    // turn round with the slider. Home and End name the two ends by value and
+    // stay put: Home is still the minimum, wherever the minimum now sits.
+    const dir = slider.entry.flip ? -1 : 1;
     const to = event.key === 'Home' ? 0
              : event.key === 'End' ? slider.param.maxValue
-             : from + steps[event.key];
+             : from + steps[event.key] * dir;
     this.emit(slider, to);
   }
 }

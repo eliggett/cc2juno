@@ -508,6 +508,58 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   stroke-opacity: 0.75;
 }
 
+/* The waveform and envelope pictures beside the stepped sliders.
+ *
+ * Everything in here is in the *drawing's* units, not the panel's: the group is
+ * scaled down by js/pg300.js, so a width of 4 here is the 4 the sheets are drawn
+ * at and arrives on the panel at about 0.66 -- near enough the rungs above to
+ * pass for the same engraving. Colour is the tick numerals', since that is what
+ * these are: legend, not controls. */
+.pg300-glyphs {
+  fill: none;
+  stroke: #aeb9bf;
+  stroke-width: 4;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  pointer-events: none;
+}
+
+/* The bracket tying an ENV MODE switch's two dynamic positions to its word.
+ * Panel units here, unlike the glyphs above -- this one is drawn by the panel,
+ * not lifted from a sheet -- so the weight is the rungs' 0.7, a shade lighter
+ * for a line that is saying something about the scale rather than being part of
+ * it. Square caps so the corners of the bracket close properly. */
+.pg300-dynamics-tie {
+  fill: none;
+  stroke: #aeb9bf;
+  stroke-width: 0.6;
+  stroke-opacity: 0.8;
+  stroke-linecap: square;
+}
+
+.pg300-dynamics {
+  font-size: 3.9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  fill: #aeb9bf;
+}
+
+/* The dotted parts, where the panel is showing a shape sweeping rather than a
+ * line that is really there. The dashes are set here rather than in the drawing
+ * for the reason everything else in this rule is: a pattern drawn at sheet scale
+ * gets multiplied by the same shrink as the artwork and lands under a pixel.
+ * These numbers are in the sheet's units and come out around 0.83 on, 0.66 off,
+ * which is 1 to 2 screen pixels over the range the panel is drawn at.
+ *
+ * Butt caps are not optional. The group above sets square caps, which add half a
+ * stroke width to each end of every dash -- 2 units either side here, enough to
+ * close a 4-unit gap and turn the whole thing back into a solid line. */
+.pg300-glyph-ghost {
+  stroke-dasharray: 5 4;
+  stroke-linecap: butt;
+  stroke-opacity: 0.8;
+}
+
 .pg300-track {
   fill: #1a1f22;
   stroke: #10161a;
