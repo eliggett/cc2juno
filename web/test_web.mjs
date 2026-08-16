@@ -20,6 +20,7 @@ import { Router } from './js/router.js';
 import * as pg from './js/pg300.js';
 import * as tonein from './js/tone_in.js';
 import * as lcd from './js/lcd.js';
+import * as presets from './js/presets.js';
 import { parse as parseYaml, YamlError } from './js/yaml.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -236,19 +237,83 @@ check('a # inside quotes is not a comment', () => {
 
 const sampleText = readFileSync(SAMPLE, 'utf8');
 
+/**
+ * A three-layer controller of this suite's own, for the tests that have to know
+ * exactly what is mapped where.
+ *
+ * Those tests used to read cc2juno.yaml and then hard-code the CC numbers it
+ * happened to contain, which made remapping a knob in the shipped file report
+ * itself as a broken build -- three failures that named the parser and the YAML
+ * writer, neither of which had anything to do with it. What they are really
+ * about is the writer and the duplicate-parameter check, and neither cares which
+ * knob does what. So they bring their own controller and leave the user's alone.
+ *
+ * Deliberately small, and deliberately not exhaustive: CC1 and CC2 do different
+ * jobs on different layers, one parameter is mapped nowhere at all, and CC5 is
+ * the layer knob so no mapping may use it.
+ */
+const THREE_LAYERS = `
+midi:
+  synth_channel: 1
+layers:
+  cc: 5
+  count: 3
+layer1:
+  "VCF Cutoff": 1
+  "DCO Wave Pulse": 2
+  "Bender Range": 3
+layer2:
+  "ENV T1": 1
+  "ENV T2": 2
+layer3:
+  "LFO Rate": 4
+`;
+
+/**
+ * The file this repo ships still parses, and still describes a coherent rig.
+ *
+ * Says nothing whatever about which knob does what. That is the user's to
+ * change, and every assertion here has to survive them changing it -- the whole
+ * point of a smoke test on a file that is meant to be edited. What must hold is
+ * that it reads without error and that everything the parser hands back hangs
+ * together: real parameters, CCs in range, no knob doing two jobs at once, and
+ * every mapped CC given a place on the grid.
+ */
 check('the shipped config loads', () => {
   const { cfg, warnings } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
-  equal(cfg.layers.length, 3);
-  equal(cfg.layerCc, 5);
-  equal(cfg.synthChannel, 1);
-  equal(cfg.listenChannel, null);
-  equal(cfg.levelByte, 0x20);
-  equal(cfg.thru, false);
-  equal([...cfg.layers[0].byCc.keys()].sort((a, b) => a - b),
-        [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 15]);
-  // No layout section, so one is built from the CCs that are in use.
-  equal(cfgmod.knobCcs(cfg).size, 15);
-  assert(warnings.some((w) => w.includes('layout')), 'expected a warning about the layout');
+
+  assert(cfg.layers.length >= 1 && cfg.layers.length <= aj.MAX_LAYERS,
+         `${cfg.layers.length} layers is outside 1-${aj.MAX_LAYERS}`);
+  assert(cfg.synthChannel >= 1 && cfg.synthChannel <= 16, 'synth channel out of range');
+  assert(cfg.listenChannel === null
+         || (cfg.listenChannel >= 1 && cfg.listenChannel <= 16), 'listen channel out of range');
+  assert(cfg.maxMsgsPerSec > 0, 'a rate limit of zero would send nothing');
+  for (const byte of [cfg.levelByte, cfg.groupByte]) {
+    assert(Number.isInteger(byte) && byte >= 0 && byte <= 0x7F,
+           `${byte} is not a sysex data byte`);
+  }
+  assert(Array.isArray(warnings) && warnings.every((w) => typeof w === 'string'),
+         'warnings should be a list of strings');
+
+  const grid = cfgmod.knobCcs(cfg);
+  let mapped = 0;
+
+  cfg.layers.forEach((layer, index) => {
+    for (const [cc, mapping] of layer.byCc) {
+      mapped += 1;
+      equal(mapping.cc, cc, `layer ${index + 1} filed CC${cc} under the wrong key`);
+      assert(cc >= 0 && cc <= 127, `CC${cc} is not a CC number`);
+      assert(aj.PARAMETERS[mapping.paramIndex],
+             `CC${cc} points at parameter ${mapping.paramIndex}, which does not exist`);
+      assert(mapping.mode === 'scale' || mapping.mode === 'clamp',
+             `CC${cc} has scaling mode "${mapping.mode}"`);
+      assert(cc !== cfg.layerCc,
+             `CC${cc} both selects the layer and sets a parameter`);
+      assert(grid.has(cc), `CC${cc} is mapped but has no cell on the grid`);
+    }
+  });
+
+  assert(mapped > 0, 'the shipped config maps nothing at all');
 });
 
 if (havePython) {
@@ -287,7 +352,9 @@ print(json.dumps({
   });
 
   check('what this build writes, config.py reads back unchanged', () => {
-    const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
+    // The suite's own controller, not the shipped one: this is about the writer,
+    // and it needs a known CC to turn into a clamp entry. See THREE_LAYERS.
+    const { cfg } = cfgmod.parseText(THREE_LAYERS, 'three layers');
     // Something for every corner of the writer: a clamp entry, layer names, a
     // layer dead zone, an empty grid cell and a non-default startup layer.
     cfg.layers[0].byCc.get(1).mode = 'clamp';
@@ -413,8 +480,8 @@ check('reshaping keeps the knobs in reading order', () => {
 });
 
 check('a parameter already in use is reported per layer', () => {
-  const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
-  // In the shipped config VCF Cutoff is CC1 on layer 1 and nowhere else.
+  // In THREE_LAYERS, VCF Cutoff is CC1 on layer 1 and nowhere else.
+  const { cfg } = cfgmod.parseText(THREE_LAYERS, 'three layers');
   const cutoff = aj.lookup('VCF Cutoff').index;
   equal(cfgmod.paramUsage(cfg, cutoff, 0), { here: 1, elsewhere: [] },
         'seen from its own layer it is here, not elsewhere');
@@ -426,16 +493,16 @@ check('a parameter already in use is reported per layer', () => {
   equal(cfgmod.paramUsage(cfg, cutoff, 2), { here: 40, elsewhere: [1] });
   equal(cfgmod.paramUsage(cfg, cutoff, 1), { here: null, elsewhere: [1, 3] });
 
-  // And an unassigned one is free. It needs its own config: the shipped one
-  // spreads all 36 parameters across its three layers, with none left over.
-  const { cfg: bare } = cfgmod.parseText('mappings:\n  "VCF Cutoff": 16\n');
-  equal(cfgmod.paramUsage(bare, aj.lookup('LFO Rate').index, 0),
+  // And a parameter the fixture maps nowhere is free.
+  equal(cfgmod.paramUsage(cfg, aj.lookup('Chorus Rate').index, 0),
         { here: null, elsewhere: [] });
 });
 
 check('the JSON round trip used by localStorage keeps everything', () => {
   const { cfg } = cfgmod.parseText(sampleText, 'cc2juno.yaml');
-  cfg.layers[1].name = 'Envelope';
+  // Every layer rather than the second one, so that this still has names to
+  // carry when the shipped config is edited down to a single layer.
+  cfg.layers.forEach((layer, index) => { layer.name = `Layer ${index + 1}`; });
   const back = cfgmod.fromJSON(JSON.parse(JSON.stringify(cfgmod.toJSON(cfg))));
   equal(cfgmod.render(back), cfgmod.render(cfg));
 });
@@ -746,8 +813,11 @@ check('a patch change does not pretend the pots moved', () => {
   const router = new Router(cfg);
   router.dryRun = true;
 
+  // Whatever knob comes first, sent on whatever channel the file says to listen
+  // on: naming either here would make editing cc2juno.yaml look like a bug.
   const [cc] = [...cfg.layers[router.layer].byCc][0];
-  router.handle(Uint8Array.from([0xB0, cc, 100]));
+  const channel = cfg.listenChannel === null ? 1 : cfg.listenChannel;
+  router.handle(Uint8Array.from([0xB0 | (channel - 1), cc, 100]));
   router.applyTone(APR_VALUES);
 
   equal(router.ccPositions.get(cc), 100, 'the pot is still where it was left');
@@ -803,6 +873,252 @@ check('a value the tone table cannot hold is clipped, not passed on', () => {
   wild[7 + aj.lookup('Bender Range').index] = 0x7F;   // documented 0-12
   const { values } = tonein.parseToneMessage(wild);
   equal(values[aj.lookup('Bender Range').index], 12);
+});
+
+// ------------------------------------------------------------- presets ---
+
+// The rule the whole feature rests on: a preset is 36 values or it is not a
+// preset. Everything below is a way of getting that wrong.
+
+// A second sound, for the tests that need two slots to hold different things.
+// Every parameter is moved one step and wrapped inside its own range, so it
+// differs from the captured patch everywhere while staying a tone the table says
+// the synth could actually hold.
+const OTHER_VALUES = APR_VALUES.map(
+  (value, index) => (value + 1) % (aj.PARAMETERS[index].maxValue + 1));
+
+check('a partial tone is not a preset, however much of it is known', () => {
+  const { router, cc, drain } = makeRouter();
+  equal(presets.isComplete(router.knownValues()), false, 'a fresh router knows nothing');
+  equal(presets.knownCount(router.knownValues()), 0);
+
+  cc(2, 70);                       // one knob moved, one parameter known
+  drain();
+  equal(presets.knownCount(router.knownValues()), 1);
+  equal(presets.isComplete(router.knownValues()), false,
+        'one known parameter must not be storable as a whole sound');
+
+  throwsWith(() => presets.makePreset(router.knownValues()), 'all 36');
+});
+
+check('a patch from the synth is what makes recording possible', () => {
+  const { router } = makeRouter();
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  equal(presets.isComplete(router.knownValues()), true);
+  equal(router.knownValues(), APR_VALUES);
+});
+
+check('a preset keeps the edits made since the patch arrived', () => {
+  const { router, cc, drain } = makeRouter();
+  router.applyTone(APR_VALUES);
+  cc(2, 70);                       // DCO Wave Pulse on layer 1, to 2
+  drain();
+
+  const want = APR_VALUES.slice();
+  want[aj.lookup('DCO Wave Pulse').index] = 2;
+  equal(router.knownValues(), want, 'the stored sound is the patch plus what was changed');
+});
+
+check('a value still in the queue is the one that gets recorded', () => {
+  // The rate limiter can hold a move for longer than it takes to hit a record
+  // button. Storing what had happened to leave already would record a sound the
+  // synth was about to stop making.
+  const { router, cc } = makeRouter();
+  router.applyTone(APR_VALUES);
+  cc(2, 70);
+  assert(router.pending.size === 1, 'the move should still be queued');
+  equal(router.knownValues()[aj.lookup('DCO Wave Pulse').index], 2);
+});
+
+check('recalling a preset sends what differs and leaves the rest alone', () => {
+  const { router, drain } = makeRouter();
+  router.applyTone(APR_VALUES);
+
+  const tweaked = APR_VALUES.slice();
+  tweaked[aj.lookup('VCF Cutoff').index] = 100;
+  tweaked[aj.lookup('VCA Level').index] = 10;
+  tweaked[aj.lookup('LFO Rate').index] = 5;
+
+  equal(router.sendTone(tweaked), 3, 'only the three that changed are worth sending');
+  equal(drain().sort(), ['LFO Rate=5', 'VCA Level=10', 'VCF Cutoff=100']);
+  equal(router.knownValues(), tweaked, 'and the recalled sound is now what is known');
+});
+
+check('recalling the preset already loaded sends nothing at all', () => {
+  const { router, drain } = makeRouter();
+  router.applyTone(APR_VALUES);
+  equal(router.sendTone(APR_VALUES), 0);
+  equal(drain(), []);
+});
+
+check('a recall leaves under the rate limit like every other message', () => {
+  // 36 parameters at once is exactly the burst the limiter exists for: an Alpha
+  // Juno will drop them if they arrive faster than it can take them.
+  const { router, sent } = makeRouter();
+  equal(router.sendTone(APR_VALUES), 36, 'nothing is known yet, so all 36 go');
+  equal(router.pending.size, 36);
+
+  router.lastSend = 0;
+  router.flush();
+  equal(sent.length, 1, 'one message per interval, not 36 in a burst');
+  equal(router.pending.size, 35);
+  // The panel does not wait for the queue: the sound is knowable in full from
+  // the moment the recall is pressed.
+  equal(presets.isComplete(router.knownValues()), true);
+});
+
+check('a recalled preset is unaffected by what the slot is later asked to hold', () => {
+  const bank = new presets.PresetBank();
+  const values = APR_VALUES.slice();
+  bank.store(0, values, { name: 'PolySynth1' });
+
+  values[0] = 3;                   // the caller's array moves on
+  equal(bank.get(0).values[0], APR_VALUES[0], 'the slot kept its own copy');
+
+  const taken = bank.get(0);
+  taken.values[1] = 3;             // and so does everyone it hands one to
+  equal(bank.get(0).values[1], APR_VALUES[1]);
+});
+
+check('slots survive the round trip through localStorage', () => {
+  const bank = new presets.PresetBank();
+  bank.store(0, APR_VALUES, { name: 'PolySynth1' });
+  bank.store(4, OTHER_VALUES, { name: 'Memory' });
+
+  const back = presets.PresetBank.fromJSON(JSON.parse(JSON.stringify(bank.toJSON())));
+  equal(back.count(), 2);
+  equal(back.get(0).values, APR_VALUES);
+  equal(back.get(0).name, 'PolySynth1');
+  equal(back.get(4).values, OTHER_VALUES);
+  equal(back.get(1), null, 'an empty slot comes back empty');
+  equal(back.get(0).savedAt, bank.get(0).savedAt, 'and knows when it was recorded');
+});
+
+check('one unreadable slot does not cost the other four', () => {
+  const bank = new presets.PresetBank();
+  bank.store(0, APR_VALUES, { name: 'Good' });
+  bank.store(1, APR_VALUES, { name: 'Damaged' });
+  bank.store(2, APR_VALUES, { name: 'Also good' });
+
+  const stored = bank.toJSON();
+  stored.slots[1].values = stored.slots[1].values.slice(0, 20);   // truncated on disk
+
+  const back = presets.PresetBank.fromJSON(stored);
+  equal(back.count(), 2, 'the survivors are kept');
+  equal(back.get(0).name, 'Good');
+  equal(back.get(1), null, 'and the bad one is simply gone');
+  equal(back.get(2).name, 'Also good');
+});
+
+check('a value out of the parameter table is refused, not clipped', () => {
+  // Clipping would be the wrong kindness here. A file this build cannot make
+  // sense of should not be turned into a sound and sent to a synth.
+  const wild = APR_VALUES.slice();
+  wild[aj.lookup('Bender Range').index] = 100;      // documented 0-12
+  equal(presets.isComplete(wild), false);
+  throwsWith(() => presets.makePreset(wild), 'all 36');
+});
+
+check('a bank written by a build we do not know is left alone', () => {
+  const bank = new presets.PresetBank();
+  bank.store(0, APR_VALUES);
+  const stored = bank.toJSON();
+  stored.version = presets.STORE_VERSION + 1;
+
+  equal(presets.PresetBank.fromJSON(stored).count(), 0,
+        'values in an unknown order or unit must not reach the synth');
+  equal(presets.PresetBank.fromJSON(null).count(), 0);
+  equal(presets.PresetBank.fromJSON({ version: presets.STORE_VERSION }).count(), 0);
+});
+
+check('a recalled slot takes over the display', () => {
+  // The synth has no numbering for a sound that came from here, and its own
+  // screen goes on showing whatever patch it is sitting on. This is the only
+  // place the two displays can disagree, and this is the side that is right.
+  const { router } = makeRouter();
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  router.setPatch(64);
+  equal(router.recalled, null, 'nothing has been recalled yet');
+
+  router.sendTone(OTHER_VALUES, { slot: presets.slotLabel(0), name: 'Fat Brass' });
+  equal(router.recalled, { slot: 'T1', name: 'Fat Brass' });
+  equal(lcd.displayText({ slot: router.recalled.slot, name: router.recalled.name }),
+        'T1     Fat Brass ');
+});
+
+check('a slot label is T1 through T5, and fits where M-11 fits', () => {
+  equal([0, 4].map(presets.slotLabel), ['T1', 'T5']);
+  for (let i = 0; i < presets.SLOT_COUNT; i += 1) {
+    const line = lcd.displayText({ slot: presets.slotLabel(i), name: 'Whatever' });
+    equal(line.length, lcd.COLUMNS, `"${line}" is the wrong width`);
+    // The tone name has to start in the column it always starts in, or it would
+    // jump sideways every time a preset was recalled.
+    equal(line.indexOf('Whatever'), lcd.displayText({ program: 0, name: 'x' }).indexOf('x'));
+  }
+});
+
+check('a preset recorded before the synth named anything shows as half known', () => {
+  equal(lcd.displayText({ slot: 'T3', name: '' }), 'T3     ----------');
+});
+
+check('the synth taking over ends the recall', () => {
+  // Both halves of a patch change do it, since either can arrive first.
+  const byTone = makeRouter().router;
+  byTone.sendTone(APR_VALUES, { slot: 'T1', name: 'Fat Brass' });
+  byTone.applyTone(OTHER_VALUES, { name: 'PolySynth1' });
+  equal(byTone.recalled, null, 'a tone dump replaced the whole sound');
+
+  const byProgram = makeRouter().router;
+  byProgram.sendTone(APR_VALUES, { slot: 'T1', name: 'Fat Brass' });
+  byProgram.setPatch(12);
+  equal(byProgram.recalled, null, 'the instrument was turned to one of its own');
+});
+
+check('editing a parameter does not end the recall', () => {
+  // The hardware keeps showing the patch name while the patch is being edited,
+  // and a preset is no different: it is the same sound with a knob moved.
+  const { router, cc, drain } = makeRouter();
+  router.sendTone(APR_VALUES, { slot: 'T2', name: 'Fat Brass' });
+  drain();
+
+  cc(2, 70);                       // a knob here
+  drain();
+  equal(router.recalled, { slot: 'T2', name: 'Fat Brass' });
+
+  router.applyParam(aj.lookup('VCF Cutoff').index, 99);   // and one on the synth
+  equal(router.recalled, { slot: 'T2', name: 'Fat Brass' });
+});
+
+check('recalling the loaded preset still says so on the display', () => {
+  // Nothing goes out, because the synth already has every value. The screen
+  // still has to name the slot -- pressing it and seeing no change at all would
+  // read as a dead button.
+  const { router, drain } = makeRouter();
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  equal(router.sendTone(APR_VALUES, { slot: 'T4', name: 'Same Sound' }), 0);
+  equal(drain(), []);
+  equal(router.recalled, { slot: 'T4', name: 'Same Sound' });
+});
+
+check('a slot can be emptied and re-recorded', () => {
+  const bank = new presets.PresetBank();
+  bank.store(2, APR_VALUES, { name: 'First' });
+  equal(bank.filled(2), true);
+  equal(bank.clear(2), true);
+  equal(bank.filled(2), false);
+  equal(bank.clear(2), false, 'clearing an empty slot changes nothing');
+
+  bank.store(2, OTHER_VALUES, { name: 'Second' });
+  equal(bank.get(2).name, 'Second');
+  equal(bank.count(), 1);
+});
+
+check('there is no slot six', () => {
+  const bank = new presets.PresetBank();
+  equal(bank.size, presets.SLOT_COUNT);
+  throwsWith(() => bank.store(presets.SLOT_COUNT, APR_VALUES), 'no such preset slot');
+  equal(bank.get(-1), null);
+  equal(bank.filled(99), false);
 });
 
 // ------------------------------------------------------------- the display ---

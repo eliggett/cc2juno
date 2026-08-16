@@ -15,8 +15,9 @@
 // PG-300, so the text they show is worked out here rather than in either of them.
 
 export const NAME_WIDTH = 10;    // characters of tone name, as the synth sends
+export const SLOT_WIDTH = 4;     // 'M-11', 'P-88', and anything standing in for one
 const GAP = '   ';               // between the slot and the name
-export const COLUMNS = 4 + GAP.length + NAME_WIDTH;
+export const COLUMNS = SLOT_WIDTH + GAP.length + NAME_WIDTH;
 const BANK_SIZE = 8;
 const BANKS = 8;
 const MEMORIES = BANK_SIZE * BANKS;
@@ -41,9 +42,15 @@ export function patchLabel(program) {
  * looks like a display that is not working, and the two halves arrive
  * separately -- the tone data first, the program number a moment later -- so
  * half-known is a state the screen really passes through.
+ *
+ * `slot` overrides the program number, for a sound that came from somewhere the
+ * synth has no numbering for -- a preset recalled from cc2juno's own slots, which
+ * is neither an M nor a P. It is cut and padded to the same width the synth's own
+ * labels occupy, so the tone name stays in the column it is always in.
  */
-export function displayText({ program = null, name = '' } = {}) {
-  const label = patchLabel(program) || '----';
+export function displayText({ program = null, name = '', slot = null } = {}) {
+  const label = (slot || patchLabel(program) || '----')
+    .slice(0, SLOT_WIDTH).padEnd(SLOT_WIDTH);
   const tone = name ? name.slice(0, NAME_WIDTH).padEnd(NAME_WIDTH) : '-'.repeat(NAME_WIDTH);
   return `${label}${GAP}${tone}`;
 }

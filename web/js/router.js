@@ -37,6 +37,13 @@ export class Router {
     this.toneName = '';
     this.patch = null;            // program number from a program change, or null
 
+    // The preset slot whose sound is loaded, if it got there from here rather
+    // than from the instrument: {slot, name}, or null for the ordinary case
+    // where the synth is on one of its own patches. Cleared the moment the synth
+    // says otherwise, since from then on it is the synth's patch that is loaded
+    // and ours that has been replaced.
+    this.recalled = null;
+
     // Which knobs have actually taken effect since the layer last changed.
     // Straight after a switch this is empty: every knob is physically pointing
     // at a value that belonged to the previous layer and none of them mean
@@ -65,6 +72,7 @@ export class Router {
     this.fromSynth.clear();
     this.toneName = '';
     this.patch = null;
+    this.recalled = null;
     this.layer = this.cfg.startupLayer - 1;
   }
 
@@ -166,6 +174,71 @@ export class Router {
     return true;
   }
 
+  /**
+   * What every parameter is currently set to: 36 entries, null where unknown.
+   *
+   * A value still in the queue counts, and outranks the one already sent. The
+   * only thing that can stop a queued value going out is a newer value for the
+   * same parameter, which is what would be reported instead -- so reading
+   * lastValue alone would report the old value for the few milliseconds the rate
+   * limiter holds a move, and anything building on that answer would flicker
+   * backwards during a sweep.
+   *
+   * Null is not zero. Until the synth announces a patch, the only parameters
+   * cc2juno knows are the ones it has itself sent; the rest are whatever the
+   * instrument was already holding, which is unknowable from here. Callers are
+   * expected to say so rather than draw a slider at the bottom of its travel or
+   * store a preset with invented values in it.
+   */
+  knownValues() {
+    return aj.PARAMETERS.map((param) => {
+      const queued = this.pending.get(param.index);
+      if (queued) return queued.value;
+      const sent = this.lastValue.get(param.index);
+      return sent === undefined ? null : sent;
+    });
+  }
+
+  /**
+   * Send a whole tone: every parameter at once, as recalling a preset does.
+   *
+   * The 36 messages go through the same queue as everything else and leave under
+   * the same rate limit. Handing them to the synth in one burst would be quicker
+   * and worse -- an Alpha Juno is not fast at receiving individual tone
+   * parameters, and the limit is set where it is because that is what the
+   * instrument was found to keep up with. A recall therefore takes 36 times the
+   * message interval to land, which at the default rate is a fraction of a
+   * second, and every slider reaches its new position immediately regardless:
+   * knownValues() reads the queue, so the screen is redrawn from where the tone
+   * is going rather than from how much of it has gone.
+   *
+   * Parameters already at the requested value are skipped, which is the same
+   * don't-resend-an-unchanged-value rule the rest of the queue follows. Recalling
+   * the preset that is already loaded therefore sends nothing at all.
+   */
+  sendTone(values, { slot = null, name = '' } = {}) {
+    let queued = 0;
+    values.forEach((value, index) => {
+      const param = aj.PARAMETERS[index];
+      if (!param || value === null || value === undefined) return;
+      const bounded = Math.max(0, Math.min(param.maxValue, Math.trunc(value)));
+      if (this.lastValue.get(index) === bounded) return;
+      this.pending.set(index, { value: bounded, mapping: null, param });
+      queued += 1;
+    });
+
+    // Set even when nothing needed sending. Recalling the slot the synth is
+    // already holding sends no messages and still means that slot is what is
+    // loaded, which is what the display is being asked to report.
+    this.recalled = slot ? { slot, name } : null;
+
+    if (this.hooks.log) {
+      this.hooks.log({ kind: 'recall', name, queued, total: aj.PARAMETERS.length });
+    }
+    this.schedule();
+    return queued;
+  }
+
   // --- what the synth tells us -----------------------------------------------
 
   /**
@@ -189,10 +262,19 @@ export class Router {
   applyTone(values, { name = '' } = {}) {
     this.pending.clear();
     this.toneName = name;
+    // Whatever preset was recalled has just been replaced wholesale by the one
+    // the synth loaded, so the display goes back to reporting the instrument.
+    this.recalled = null;
     values.forEach((value, index) => this.remember(index, value));
   }
 
-  /** Adopt one parameter, as sent when the synth's own panel is edited. */
+  /**
+   * Adopt one parameter, as sent when the synth's own panel is edited.
+   *
+   * A recalled preset survives this. Editing one parameter does not make the
+   * sound a different patch -- the instrument goes on showing the name of the
+   * patch being edited, and so does this.
+   */
   applyParam(index, value) {
     if (!aj.PARAMETERS[index]) throw new Error(`no such parameter: ${index}`);
     this.pending.delete(index);
@@ -206,9 +288,17 @@ export class Router {
     this.fromSynth.add(index);
   }
 
-  /** The program number the synth last reported switching to. */
+  /**
+   * The program number the synth last reported switching to.
+   *
+   * This ends a recall as surely as a tone dump does: the instrument has been
+   * turned to one of its own patches, so a slot number of ours is no longer what
+   * is loaded, whichever of the two messages a patch change happens to send
+   * first.
+   */
   setPatch(program) {
     this.patch = program;
+    this.recalled = null;
   }
 
   /**

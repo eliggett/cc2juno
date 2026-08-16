@@ -103,6 +103,23 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
          page opens on it. The grid above starts hidden for the same reason, so
          that the first paint is already the view the app is about to show. -->
     <div id="pg300-host"></div>
+
+    <!-- Five quick preset slots, under whichever performance view is up and only
+         while performing. The buttons themselves are built by js/app.js, since
+         what they say and whether they can be pressed changes as the synth
+         reports in. Recall is the upper row: it is the one reached for while
+         playing, and it is the one that cannot destroy anything. -->
+    <div id="presets" class="presets" hidden>
+      <div class="preset-row">
+        <span class="preset-caption">Recall</span>
+        <div id="preset-recall" class="preset-slots" role="group" aria-label="Recall preset"></div>
+      </div>
+      <div class="preset-row">
+        <span class="preset-caption">Record</span>
+        <div id="preset-store" class="preset-slots" role="group" aria-label="Record preset"></div>
+      </div>
+      <p id="preset-note" class="preset-note"></p>
+    </div>
   </section>
 
   <aside id="side" class="side">

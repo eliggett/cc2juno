@@ -15,8 +15,15 @@ import { Pg300Panel } from './pg300.js';
 import { MoveDetector, LEARN_MOVE_THRESHOLD } from './learn.js';
 import { SysexStream, parseToneMessage } from './tone_in.js';
 import { Lcd, patchLabel } from './lcd.js';
+import { PresetBank, SLOT_COUNT, isComplete, knownCount, slotLabel } from './presets.js';
 
 const STORE_KEY = 'cc2juno.web.config';
+// Presets are kept apart from the configuration, and not in the exported YAML at
+// all. The config file describes a controller and is read by the Python and
+// Tulip builds as well; a preset describes a sound, is written far more often,
+// and would be an odd thing to find in a file someone is hand-editing to change
+// a CC number. Resetting the configuration therefore leaves the presets alone.
+const PRESETS_KEY = 'cc2juno.web.presets';
 const GRANTED_KEY = 'cc2juno.web.midi-granted';
 const LOG_LIMIT = 400;
 
@@ -109,6 +116,8 @@ function worthLighting(data) {
 let knobs = [];
 let panel = null;         // the PG-300, built the first time it is asked for
 let lcd = null;           // the display over the grid; the panel draws its own
+let bank = new PresetBank(SLOT_COUNT);
+const presetButtons = { recall: [], store: [] };   // built once, then updated
 const seenUnmapped = new Set();   // `${layer}:${cc}`, so each is reported once
 const seenInactive = new Set();
 
@@ -250,6 +259,35 @@ function restore() {
   } catch (exc) {
     console.warn('stored configuration could not be read; starting fresh', exc);
     return false;
+  }
+}
+
+/**
+ * The presets, written as they change rather than on the config's timer.
+ *
+ * Recording one is a deliberate press and there is no way to undo it, so it goes
+ * to storage there and then. The config's debounce is for the opposite case --
+ * a number field being typed into, where nine of the ten values on the way are
+ * of no interest to anybody.
+ */
+function savePresets() {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(bank.toJSON()));
+    return true;
+  } catch (exc) {
+    console.warn('could not save the presets', exc);
+    return false;
+  }
+}
+
+function restorePresets() {
+  try {
+    bank = PresetBank.fromJSON(JSON.parse(localStorage.getItem(PRESETS_KEY) || 'null'),
+                               SLOT_COUNT);
+  } catch (exc) {
+    // Unreadable storage costs the presets, not the session.
+    console.warn('stored presets could not be read; starting with empty slots', exc);
+    bank = new PresetBank(SLOT_COUNT);
   }
 }
 
@@ -670,17 +708,15 @@ function panelReadings() {
     for (const mapping of other.byCc.values()) elsewhere.add(mapping.paramIndex);
   }
 
+  // Where each parameter stands, queue included, is router.knownValues()'s
+  // business -- the same answer the preset row asks it for, so a slider and a
+  // recorded preset can never disagree about what the synth is currently set to.
+  const values = router.knownValues();
+
   return aj.PARAMETERS.map((param) => {
     const cc = here.has(param.index) ? here.get(param.index) : null;
-    // A value still in the queue counts: the only thing that can stop it going
-    // out is a newer value for the same parameter, which is what would be shown
-    // instead. Reading lastValue alone would drag a slider back to where it was
-    // for the few milliseconds the rate limiter holds the move -- and every
-    // further nudge would then start again from the old value.
-    const queued = router.pending.get(param.index);
-    const sent = queued ? queued.value : router.lastValue.get(param.index);
     return {
-      value: sent === undefined ? null : sent,
+      value: values[param.index],
       cc,
       reach: cc !== null ? 'layer' : (elsewhere.has(param.index) ? 'other' : 'none'),
     };
@@ -721,6 +757,157 @@ function refreshPanel() {
   panel.setPatch(patchReading());
 }
 
+// ----------------------------------------------------------------- presets ---
+
+/**
+ * Five slots that hold a whole sound, and put it back.
+ *
+ * Recording is offered only when all 36 parameters are known, which in practice
+ * means the synth has announced a patch and cc2juno has been following the edits
+ * since. The reason is in presets.js: a preset assembled from the handful of
+ * parameters that happen to have been touched would recall differently every
+ * time, depending on what the synth was already holding. Rather than let the
+ * button record something that behaves like that, it stays off and the note
+ * underneath says what is missing.
+ *
+ * Recall is always available for a slot that holds something. It sends the whole
+ * tone through the ordinary queue, so the rate limit still applies and the panel
+ * still redraws from the queue rather than from what has left so far.
+ */
+function buildPresets() {
+  if (presetButtons.recall.length) return;
+
+  $('preset-recall').style.setProperty('--slots', bank.size);
+  $('preset-store').style.setProperty('--slots', bank.size);
+
+  for (let i = 0; i < bank.size; i += 1) {
+    const recall = document.createElement('button');
+    recall.className = 'preset-slot';
+    recall.addEventListener('click', () => recallPreset(i));
+    presetButtons.recall.push(recall);
+    $('preset-recall').append(recall);
+
+    const store = document.createElement('button');
+    store.className = 'preset-slot preset-record';
+    store.addEventListener('click', () => storePreset(i));
+    presetButtons.store.push(store);
+    $('preset-store').append(store);
+  }
+}
+
+/**
+ * Redraw the row in place.
+ *
+ * In place, and only where something actually differs, because this runs again
+ * every time a parameter leaves the queue -- which during a knob sweep is as
+ * often as the rate limit allows. Rebuilding the buttons at that rate would drop
+ * the keyboard focus out of whichever one the user was on.
+ */
+function renderPresets() {
+  const showing = state.mode === 'perform';
+  $('presets').hidden = !showing;
+  if (!showing) return;
+
+  buildPresets();
+  const values = router.knownValues();
+  const complete = isComplete(values);
+
+  for (let i = 0; i < bank.size; i += 1) {
+    const preset = bank.get(i);
+    const slot = String(i + 1);
+    const named = preset && preset.name ? `${slot} · ${preset.name}` : slot;
+
+    const recall = presetButtons.recall[i];
+    setButton(recall, {
+      text: named,
+      disabled: !preset,
+      title: preset
+        ? `Send ${preset.name || `preset ${slot}`} to the synth`
+        : `Slot ${slot} is empty`,
+    });
+    recall.classList.toggle('is-filled', Boolean(preset));
+
+    setButton(presetButtons.store[i], {
+      text: slot,
+      disabled: !complete,
+      title: complete
+        ? (preset
+          ? `Replace slot ${slot} with the current settings`
+          : `Record the current settings into slot ${slot}`)
+        : 'The current settings are not fully known yet',
+    });
+  }
+
+  renderPresetNote(values, complete);
+}
+
+/** Only touch the DOM where it is wrong; see renderPresets. */
+function setButton(button, { text, disabled, title }) {
+  if (button.textContent !== text) button.textContent = text;
+  if (button.disabled !== disabled) button.disabled = disabled;
+  if (button.title !== title) button.title = title;
+}
+
+/**
+ * The line under the row, which exists for one question: why is Record off?
+ *
+ * A disabled button with no explanation reads as a broken button, and this one
+ * is off for most of the first minute of every session -- until the synth is
+ * asked for a patch, cc2juno has no business claiming to know what it sounds
+ * like. So the note says what is missing and how to fix it, and gets out of the
+ * way once it has been fixed.
+ */
+function renderPresetNote(values, complete) {
+  const note = $('preset-note');
+  const known = knownCount(values);
+
+  if (complete) {
+    note.textContent = bank.count()
+      ? `${bank.count()} of ${bank.size} slots recorded.`
+      : 'Record the current settings into a slot to keep them.';
+    note.classList.remove('is-warn');
+    return;
+  }
+
+  note.textContent = `Recording needs all 36 parameters, and ${known} `
+    + `${known === 1 ? 'is' : 'are'} known so far — choose a patch on the synth, `
+    + 'with its MIDI out connected, and cc2juno will read the whole sound in.';
+  note.classList.add('is-warn');
+}
+
+function storePreset(index) {
+  const values = router.knownValues();
+  if (!isComplete(values)) return;
+
+  // The synth's own name for the sound if it gave one, since that is what the
+  // user will be looking for. The library will let this be edited later.
+  const preset = bank.store(index, values, { name: router.toneName });
+  savePresets();
+  logLine(`preset   ${pad('', 9)}-> slot ${index + 1} recorded`
+          + (preset.name ? ` as "${preset.name}"` : ''), 'layer');
+  renderPresets();
+}
+
+function recallPreset(index) {
+  const preset = bank.get(index);
+  if (!preset) return;
+
+  const sent = router.sendTone(preset.values, {
+    slot: slotLabel(index),
+    name: preset.name,
+  });
+  // The sliders jump now rather than following the queue out: knownValues()
+  // counts what is queued, so the panel already knows where everything is going.
+  // This also puts the slot on the display, which is why it runs before the
+  // early return below -- a recall that sent nothing still changed the screen.
+  refreshStage();
+  renderSummary();
+  if (!sent) return;
+  if (state.mode === 'perform' && !ports.output) {
+    banner('warn', 'No synth chosen, so the preset was not sent anywhere.');
+  }
+}
+
 // ----------------------------------------------------------------- display ---
 
 /**
@@ -731,6 +918,12 @@ function refreshPanel() {
  * missing, and the display is built to say so rather than to wait.
  */
 function patchReading() {
+  // A recalled preset takes the screen over. The sound loaded is the one in that
+  // slot, not the patch whose number the synth last announced -- and the synth's
+  // own display has no way of saying so, since it does not know the slot exists.
+  if (router.recalled) {
+    return { slot: router.recalled.slot, name: router.recalled.name };
+  }
   return { program: router.patch, name: router.toneName };
 }
 
@@ -744,6 +937,11 @@ function refreshLcd() {
 
 /** Redraw whichever of the two views the stage is showing. */
 function refreshStage() {
+  // The preset row sits under both views and outlives the switch between them.
+  // It is redrawn here rather than only in refresh() because what it can offer
+  // changes with the traffic: the parameter that just went out may have been the
+  // last unknown one, which is the moment Record becomes possible.
+  renderPresets();
   if (showingPanel()) {
     refreshPanel();
     return;
@@ -1154,6 +1352,13 @@ function renderSummary() {
     rows.push(['Synth patch',
                [patchLabel(router.patch), router.toneName].filter(Boolean).join('  ')]);
   }
+  // Kept as a row of its own rather than replacing the one above. Both are true
+  // at once and they are different facts: the synth is still sitting on the
+  // patch it announced, and this is what has since been sent over the top of it.
+  if (router.recalled) {
+    rows.push(['Preset',
+               [router.recalled.slot, router.recalled.name].filter(Boolean).join('  ')]);
+  }
 
   for (const [term, description] of rows) {
     const dt = document.createElement('dt');
@@ -1228,6 +1433,16 @@ function logEntry(entry) {
     case 'panel': {
       logLine(`panel    ${pad('', 9)}-> sending `
               + `${entry.param.name} = ${aj.label(entry.param, entry.value)}`, 'mapped');
+      break;
+    }
+    case 'recall': {
+      const named = entry.name ? ` "${entry.name}"` : '';
+      // Saying how many of the 36 are actually going out matters: the rest were
+      // skipped because the synth already has them, and a recall that reports
+      // "0 parameters" is the correct and reassuring answer to recalling the
+      // preset that is already loaded.
+      logLine(`preset${named} -> sending ${entry.queued} of ${entry.total} parameters`,
+              'layer');
       break;
     }
     case 'sysex': {
@@ -1519,6 +1734,7 @@ function refresh() {
   }
   renderLayerBar();
   renderStageNote();
+  renderPresets();
   renderInspector();
   if (state.mode === 'config') renderForm();
   else renderSummary();
@@ -1755,6 +1971,9 @@ function start() {
   const restored = restore();
   if (!restored) state.cfg = cfgmod.makeConfig();
   router.setConfig(state.cfg);
+  // Presets survive a bad config, and a config reset, since they describe the
+  // synth rather than the controller.
+  restorePresets();
 
   // The page opens on the PG-300, running. It is the view that says what the
   // program is for, where Configure reads as a settings screen, and the mapping
