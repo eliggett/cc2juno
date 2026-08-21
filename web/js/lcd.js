@@ -44,11 +44,22 @@ export function patchLabel(program) {
  * half-known is a state the screen really passes through.
  *
  * `slot` overrides the program number, for a sound that came from somewhere the
- * synth has no numbering for -- a preset recalled from cc2juno's own slots, which
- * is neither an M nor a P. It is cut and padded to the same width the synth's own
- * labels occupy, so the tone name stays in the column it is always in.
+ * synth has no numbering for -- a preset recalled from cc2juno's own slots, or a
+ * patch played straight out of a file, neither of which is an M or a P. It is cut
+ * and padded to the same width the synth's own labels occupy, so the tone name
+ * stays in the column it is always in.
+ *
+ * `text` gives the whole line over to something that is not a patch at all: a
+ * bulk transfer counting messages, or a prompt to go and press three buttons on
+ * the synth. Those take five to ten seconds and the display is the only thing on
+ * screen looking at the instrument, so it is worth borrowing. It takes precedence
+ * over everything else, and is padded to the same fixed width so the screen never
+ * changes size with what is on it.
  */
-export function displayText({ program = null, name = '', slot = null } = {}) {
+export function displayText({ program = null, name = '', slot = null, text = null } = {}) {
+  if (text !== null && text !== undefined) {
+    return String(text).slice(0, COLUMNS).padEnd(COLUMNS);
+  }
   const label = (slot || patchLabel(program) || '----')
     .slice(0, SLOT_WIDTH).padEnd(SLOT_WIDTH);
   const tone = name ? name.slice(0, NAME_WIDTH).padEnd(NAME_WIDTH) : '-'.repeat(NAME_WIDTH);

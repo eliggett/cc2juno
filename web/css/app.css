@@ -84,6 +84,18 @@ body {
 #about-open:hover { background: var(--info-bright); border-color: var(--info-bright); }
 
 .ports, .files, .modes { display: flex; align-items: center; gap: 8px; }
+/* The Activity panel's switch. A checkbox rather than a button because it
+ * reports a state that is plain to see on screen, and it sits with the file
+ * controls because that is where the other page-wide switches are. */
+.files-check {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.files-check:has(input:disabled) { color: var(--dim); cursor: default; }
 /* Three port menus is more than a narrow window has room for in one line. */
 .ports { flex-wrap: wrap; }
 .ports label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
@@ -94,8 +106,9 @@ body {
   border-radius: 999px;
   padding: 6px 16px;
 }
-/* A mode that is only named, not built. It keeps the shape of its neighbours so
-   the row reads as one set, and the dashed edge says the room is empty. */
+/* Four of them now, which is more than a laptop has room for at the old size.
+   The row is allowed to wrap rather than squeezing the port menus. */
+.modes { flex-wrap: wrap; }
 .modes button:disabled, .modes button:disabled:hover {
   background: transparent;
   border-style: dashed;
@@ -146,6 +159,15 @@ button:disabled, button:disabled:hover {
 button.quiet:disabled, button.quiet:disabled:hover { background: transparent; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #211505; font-weight: 600; }
 button.primary:hover { background: #ffc073; }
+/* Named again, and after, because the generic disabled rule above is written
+   earlier at the same specificity and would otherwise lose to the fill -- a
+   disabled primary button looked exactly like a live one. */
+button.primary:disabled, button.primary:disabled:hover {
+  background: var(--raised);
+  border-color: var(--line);
+  color: var(--dim);
+  font-weight: 400;
+}
 button.quiet { background: transparent; color: var(--muted); }
 button.quiet:hover { color: var(--text); }
 button.small { padding: 2px 8px; font-size: 12px; }
@@ -196,7 +218,14 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   padding: 18px 20px 28px;
   overflow: auto;
   min-width: 0;
+  /* A row, because two of the four modes put a patch list beside whatever else
+   * they are drawing. With one child this is exactly what it was before. */
+  display: flex;
+  align-items: stretch;
+  gap: 18px;
 }
+
+.stage-body { flex: 1; min-width: 0; }
 
 .side {
   border-left: 1px solid var(--line);
@@ -870,6 +899,235 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
 .log .l-unchanged { color: var(--dim); }
 .log .l-thru      { color: #7f93a8; }
 
+/* ------------------------------------------------------------- library --- */
+
+/* Patch Manager draws neither the grid nor the panel, so its display goes here,
+ * across the top of the page. Centred, because there is nothing to line it up
+ * with -- unlike the grid's, which is centred over the knobs. */
+.header-lcd {
+  display: flex;
+  justify-content: center;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The two banks, side by side, with the copy and move buttons between them. */
+.manager {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+.manager > .patch-pane { flex: 1; min-width: 0; }
+
+.manager-middle {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  /* Wide enough for the widest legend, so the column does not change width as
+   * the buttons enable and disable. */
+  flex: 0 0 92px;
+}
+
+/* Live Patch: the same pane, beside the controls rather than beside a bank.
+ *
+ * Sticky, because the PG-300 is taller than most windows and scrolling down to
+ * see the envelope should not take the patch list off the screen -- the whole
+ * point of this mode is clicking a patch and watching the controls jump. */
+.live-pane {
+  flex: 0 0 clamp(220px, 22vw, 300px);
+  align-self: flex-start;
+  position: sticky;
+  top: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.live-pane > .patch-pane { flex: 1; min-width: 0; }
+
+/* Which of the two lists to play from. Only shown once the synth-memory pane
+ * has something in it, since the alternative would be 64 blank rows. */
+.live-switch { flex: 0 0 auto; }
+.live-switch button { flex: 1; }
+
+/* The pane element is shared with Patch Manager, and most of its buttons are
+ * organising rather than playing: writing all 64 to the synth is not something
+ * to have within reach of a browse-by-ear list, and five buttons would not fit
+ * across this column anyway. */
+.live-pane .manager-only { display: none; }
+
+.patch-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--raised);
+  padding: 10px 12px 12px;
+}
+
+/* Both of these must keep their height. They are flex items in a column whose
+ * height is capped -- by the window in Live Patch, by the stage in the manager --
+ * and the default flex-shrink would let the list squash them until it was
+ * drawn over its own title. */
+.patch-pane-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.patch-pane-head h2 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.patch-pane-count { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+.patch-pane-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+
+.patch-pane-source {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--dim);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.patch-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.patch-empty {
+  flex: 0 1 auto;
+  overflow: auto;
+  margin: 0;
+  padding: 18px 14px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+
+.patch-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-top: 1px solid transparent;
+  user-select: none;
+}
+.patch-row:hover { background: #1a2126; }
+/* The synth's own numbering steps every eight -- 18 is the end of bank 1 and 21
+ * the start of bank 2 -- so the list is ruled where the instrument is. */
+.patch-row.is-bank-start { border-top-color: var(--line); }
+
+.patch-slot {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  text-align: center;
+}
+.patch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch-row.is-empty { cursor: default; }
+.patch-row.is-empty .patch-name { color: var(--dim); }
+.patch-row.is-empty:hover { background: transparent; }
+
+.patch-row.is-selected { background: var(--accent-dim); }
+.patch-row.is-selected .patch-slot { color: #f0d9b4; }
+.patch-row.is-selected .patch-name { color: #fff2df; }
+.patch-row.is-selected:hover { background: #8a6029; }
+
+/* Where the drag would land. A line above the row rather than a fill, because
+ * the fill already means "selected" and the two are often true at once. */
+.patch-row.is-drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+  background: #241d0f;
+}
+
+.patch-name-input {
+  width: 100%;
+  padding: 1px 4px;
+  font: inherit;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------ transfers --- */
+
+.transfer {
+  width: min(520px, calc(100vw - 32px));
+  padding: 22px 24px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.transfer::backdrop { background: rgba(0, 0, 0, 0.6); }
+.transfer h2 { margin: 0 0 14px; font-size: 18px; }
+.transfer-body p { margin: 0 0 12px; color: var(--muted); line-height: 1.55; }
+/* `.transfer-body p` is a class and an element, so a bare class here would lose
+ * to it and the warning would be drawn in the ordinary body colour. */
+.transfer-body .transfer-warn { color: #f2cf8c; }
+
+/* The synth's own button legends. Set as keys because that is what they are:
+ * three things to find on a front panel, in the order they are pressed. */
+.key-seq {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 14px;
+  color: var(--dim);
+}
+.key-seq kbd {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.transfer-meter { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; }
+.transfer-meter progress {
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  accent-color: var(--accent);
+}
+.transfer-note { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
+.transfer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* --------------------------------------------------------------- about --- */
 
 .about {
@@ -905,6 +1163,7 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
 .about-body .about-lead { color: var(--text); font-size: 15px; }
 .about-body .about-fine { font-size: 12px; color: var(--dim); }
 .about-body strong, .about-body em { color: var(--text); }
+.about-body code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
 .about-body a { color: var(--accent); text-decoration-color: var(--accent-dim); }
 .about-body a:hover { text-decoration-thickness: 2px; }
 .about-body .about-logo {
@@ -926,4 +1185,13 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   main { grid-template-columns: minmax(0, 1fr); }
   .side { border-left: none; border-top: 1px solid var(--line); }
   body { overflow: auto; }
+
+  /* Two banks and a button column will not fit across a phone, and a list squeezed
+   * to nothing is worse than a list you have to scroll to. Stacking also puts the
+   * copy buttons between the two, which is where they point. */
+  .stage { flex-direction: column; }
+  .manager { flex-direction: column; }
+  .manager-middle { flex-direction: row; justify-content: flex-start; flex-basis: auto; }
+  .patch-list { max-height: 46vh; }
+  .live-pane { position: static; flex-basis: auto; max-height: none; width: 100%; }
 }

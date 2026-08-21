@@ -233,7 +233,7 @@ export class Router {
     this.recalled = slot ? { slot, name } : null;
 
     if (this.hooks.log) {
-      this.hooks.log({ kind: 'recall', name, queued, total: aj.PARAMETERS.length });
+      this.hooks.log({ kind: 'recall', slot, name, queued, total: aj.PARAMETERS.length });
     }
     this.schedule();
     return queued;
@@ -367,6 +367,38 @@ export class Router {
   report(cc, ccValue, kind, extra = {}) {
     if (this.hooks.onKnob) this.hooks.onKnob({ cc, ccValue, kind, ...extra });
     if (this.hooks.log) this.hooks.log({ kind, cc, ccValue, ...extra });
+  }
+
+  /**
+   * Throw away everything queued and stop the timer.
+   *
+   * The values are not lost in any meaningful sense: they were on their way to an
+   * edit buffer, and the only thing that calls this is about to replace what the
+   * edit buffer means.
+   */
+  dropPending() {
+    this.pending.clear();
+    this.stop();
+  }
+
+  /**
+   * Go quiet for the duration of a bulk transfer.
+   *
+   * A bulk transfer takes five to ten seconds with the synth in DATA TRANSFER
+   * mode, and one parameter message landing in the middle of that stream is the
+   * sort of thing a 1986 instrument answers by abandoning the transfer. The
+   * modal dialog stops anyone clicking a slider, but it cannot stop a physical
+   * knob on the controller, and that is exactly the hand that reaches out while
+   * something is happening.
+   *
+   * So the router goes on routing -- knob positions are still tracked, the log
+   * still fills in, the screen still follows -- and simply transmits nothing.
+   * Anything queued is dropped rather than saved up, because releasing a held
+   * sweep the instant the transfer ends would be its own kind of surprise.
+   */
+  holdTransmission(held) {
+    this.dryRun = Boolean(held);
+    if (held) this.dropPending();
   }
 
   stop() {

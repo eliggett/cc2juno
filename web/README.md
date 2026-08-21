@@ -68,10 +68,11 @@ wrong, and it says so before a single knob has been mapped. Clock and active
 sensing are the one exception: an Alpha Juno sends active sensing the whole time
 it is powered up, so counting it would just hold the lamp on.
 
-**Hide status** puts that right-hand panel away and gives the whole window to
-the knobs or the PG-300; **Show status** brings it back. Only Perform offers it.
-Configure keeps the panel whatever this was last set to, because in that mode it
-is the editor — hiding it would leave a screen with nothing to press.
+The **Status** checkbox in the top bar puts that right-hand panel away and gives
+the whole window to whatever the mode is drawing. Configure keeps the panel
+whatever the box says, because in that mode it is the editor — hiding it would
+leave a screen with nothing to press — so the box goes dead there rather than
+disappearing.
 
 Knobs can also be turned on screen, which goes through exactly the same path as a
 real CC — useful for testing without reaching for the controller, and for the
@@ -107,7 +108,8 @@ the wrong thing:
 
 ## The PG-300 view
 
-Perform mode has two views of the same running mapping, switched above the grid.
+Perform and Live Patch have two views of the same running mapping, switched above
+the grid.
 
 The **knob grid** is a picture of your controller: the knobs you own, where you
 put them, saying what each one does. The **PG-300** is a picture of the synth:
@@ -138,6 +140,149 @@ the same rate-limited queue, and the log names it.
 The empty area at the top right is the one Roland put their logo in. Ours is a
 placeholder: replace the contents of `#pg300-logo` in `js/pg300.js`. The display
 below it is a separate group and stays where it is.
+
+## Patch Manager
+
+`.syx` bank files, and the synth's own memory. Both panes list patches the way
+the front panel numbers them — `11` to `88`, eight banks of eight, no zero and no
+bank 9.
+
+**The right-hand pane is a file.** Open a `.syx` — the ordinary bulk dump any
+Alpha Juno or MKS-50 librarian writes — and it lists what is actually in it, so a
+file holding sixteen patches shows sixteen rows rather than sixteen followed by
+48 blanks. Click one and the synth plays it immediately; see **Auditioning**
+below.
+
+A `.mid` holding the same dump works too — see **MIDI files** below. Which of the
+two a file is gets decided by reading it, not by its name, since plenty of banks
+are saved as `.mid` and plenty of MIDI files end up called `.syx`.
+
+**The left-hand pane is the synth's 64 memories.** It starts empty. Fill it by
+receiving a dump, by opening a file straight into it, by dragging patches over
+from the right, or with **◀ Copy All**, which takes the whole file and lays it in
+from slot 11 — the "make this file my set" button. Then rename (double-click),
+reorder (drag, or **Move ▲ ▼**), clear slots, and write the lot back.
+
+**◀ Copy** places just the patches selected on the right, starting at whichever
+slot is selected on the left. **◀ Copy All** always starts at 11, because a
+button that emptied a file into the middle of the memory because a row happened
+to be selected — dropping whatever ran off the end — would be a poor surprise. It
+asks first if there is anything there to overwrite.
+
+Selection works as a list does: click, shift-click for a range, ctrl-click to add
+one. A drag carries the whole selection. Dropping onto a slot in the left pane
+**replaces** that slot and the ones after it — the synth has exactly 64 addresses
+and no notion of making room — while dragging *within* the left pane moves the
+patches and slides everything else along, which is how a set is put into the
+order it should be written in.
+
+### Auditioning
+
+Clicking a patch in either pane sends its 36 parameters to the synth's edit
+buffer, through the same rate-limited queue everything else uses. The knob grid
+and the PG-300 jump to match, so hopping over to Perform shows the sound you just
+picked already on the controls.
+
+Nothing is written to the synth's memory, and **the name and slot number do not
+travel** — they can be sent, and the synth ignores them. To keep an auditioned
+sound, press **WRITE** on the synth while it is playing. To keep a whole set, use
+a bulk load.
+
+The display therefore reads `T32   SpaceyWoW`: `T` for temporary, `32` the
+patch's slot in the file, and the name out of the file. None of that is anything
+the instrument knows.
+
+### MIDI files
+
+**Beta.** Banks are often circulated as `.mid` rather than `.syx`, because that is
+what a sequencer saves when you record a dump off the synth. cc2juno reads those:
+if the file starts with a MIDI file header its tracks are unwrapped, every
+complete system-exclusive message is pulled out in playing order, and the result
+is handed to the same reader a `.syx` goes through.
+
+This is worth spelling out because it cannot be done by scanning for `F0`, which
+is what a raw dump allows. In a MIDI file every event carries a delta time, sysex
+carries a length, and channel events may leave their status byte out altogether —
+so a pitch-bend value of `F0` would be read as the start of a message and swallow
+whatever followed. Every event has to be stepped over properly instead. Handled:
+format 0 and format 1, running status, meta events, chunks of unknown type,
+messages split across `F0` and `F7` continuation packets, whole messages inside
+an `F7` escape, and `RMID` (a MIDI file in a RIFF wrapper). An incomplete message
+is dropped rather than handed on, since a tone built from a truncated dump is a
+patch with rubbish in it — worse than one patch fewer, and much harder to notice.
+
+It is marked beta because it has been tested against files this project generated
+and against files written by [mido](https://mido.readthedocs.io/), not against
+the ones a 1990s sequencer or an old librarian wrote. Loading one puts up a note
+saying so, once per session. **Check the patch names look right before writing
+anything to the synth** — and if they do not, that file would be very welcome as
+a bug report.
+
+A MIDI file with no sysex in it, and one whose sysex belongs to another
+instrument, are told apart and reported differently; so is one full of Alpha Juno
+messages that are not bulk dumps, which is what a recording of somebody editing
+looks like and which no librarian can turn back into a bank.
+
+### Receiving a dump
+
+Press **Receive**, then on the synth:
+
+> **DATA TRANSFER** + **WRITE** + **1 BULK DUMP**
+
+The transfer starts as soon as you press them and takes five to ten seconds. A
+progress bar counts the sixteen messages, the display counts along with it, and
+**Cancel** gives up. What arrives replaces the left-hand pane.
+
+A dump arrives on the synth's own MIDI out, so the **From Synth** port has to be
+chosen first. If you press the buttons before pressing Receive, the log says so
+rather than the dump vanishing silently.
+
+### Writing a bank
+
+Press **Send all 64**. On the synth, set the rear-panel **Memory Protect** switch
+to off, then:
+
+> **DATA TRANSFER** + **WRITE** + **2 BULK LOAD**
+
+The synth then waits. Press **Continue** and the sixteen messages go out with a
+200 ms gap between them — about four seconds. The gap is not decoration: the
+synth has to write each block of four patches to memory before it can take the
+next, and it drops whatever arrives while it is busy, silently, so too small a
+gap looks like a transfer that worked and lost patches.
+
+This replaces **all 64** patches. Empty slots go in as silence and cannot be left
+out, because a bulk load commits the whole set at once; the dialog says how many
+there are before you commit.
+
+An Alpha Juno-2 will not commit a single slot from a bulk message — armed for
+BULK LOAD it waits for all sixteen — so there is deliberately no "write this one
+patch" button anywhere.
+
+While either transfer runs, cc2juno transmits nothing else. Knobs on the
+controller are still tracked and still drawn, but a parameter message landing in
+the middle of a bulk stream is the sort of thing a 1986 instrument answers by
+abandoning the transfer.
+
+## Live Patch
+
+The same panes, put beside the performance controls instead of beside each other:
+patches on the right, knob grid or PG-300 on the left. Click a patch and it loads
+and the controls jump.
+
+It is for playing a file rather than filing it — 64 sounds on tap without ever
+touching the synth's memory or its patch buttons. The list stays put while the
+panel scrolls, and the display reads `T` plus the slot in the list, as above.
+
+Once the synth-memory pane holds something, a **Patch file / Synth memory** switch
+appears above the list and either can be played from. Until then there is no
+switch, because an empty set is 64 blank rows and nothing to hear — receive a dump
+in Patch Manager, or copy a file in, and it turns up.
+
+These are the same two pane elements Patch Manager uses, moved rather than
+copied, so a file opened in either mode is already open in the other, scrolled to
+the same place with the same patch selected. The organising buttons — Receive,
+Send all 64, Open, Save, New set — are hidden here: writing all 64 patches to the
+instrument is not something to have within reach of a browse-by-ear list.
 
 ## Listening to the synth
 
@@ -241,6 +386,10 @@ does not throw the grid away; the Tulip build skips it.
 | `js/midi.js` | Web MIDI access, port selection, message decoding |
 | `js/tone_in.js` | Reading the patch data the synth broadcasts back |
 | `js/lcd.js` | The display, and the M-11/P-88 slot numbering it shows |
+| `js/bank.js` | The 32-byte packed tone format, and a bank of 64 slots |
+| `js/bulk.js` | Bulk dump and bulk load: collecting one, pacing the other |
+| `js/library.js` | One patch pane: its list, its selection, and the dragging |
+| `js/smf.js` | Unwrapping sysex from a Standard MIDI File |
 | `fonts/MatrixSans/` | Matrix Sans by FriedOrange, SIL OFL 1.1 — the display face |
 | `js/knob.js` | One knob: the SVG dial and its pointer handling |
 | `js/pg300.js` | The PG-300 panel: its geometry, and one slider's behaviour |
@@ -264,9 +413,7 @@ those sections are skipped and the rest still runs.
 
 ## TODO / Ideas: 
 
-1. Integrated Patch Library Manager with some included patch collections
-  - Perhaps this would just be lists/categories of patches instantly auditioned, without messing around with the synth's internal preset memory slots. 
-2. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
+1. "Test" button to play middle-C (one second, half velocity) from the browser. Location: right of "running" indicator
 3. Printable template art to go around generic midi CC hardware box. Will need knob spacing information. 
 6. Drop down menu to select that all controller UI elements are vertical sliders, horizontal sliders, or knobs. Does not alter PG-300 appearance at all. 
 7. Support for CC buttons and delta-encoders. Maybe buttons for layers? 

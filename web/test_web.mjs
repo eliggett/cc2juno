@@ -21,6 +21,9 @@ import * as pg from './js/pg300.js';
 import * as tonein from './js/tone_in.js';
 import * as lcd from './js/lcd.js';
 import * as presets from './js/presets.js';
+import * as bank from './js/bank.js';
+import * as bulk from './js/bulk.js';
+import * as smf from './js/smf.js';
 import { parse as parseYaml, YamlError } from './js/yaml.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +37,17 @@ let skipped = 0;
 function check(name, body) {
   try {
     body();
+    passed += 1;
+    console.log(`ok    ${name}`);
+  } catch (exc) {
+    failed += 1;
+    console.log(`FAIL  ${name}\n        ${exc.message.split('\n').join('\n        ')}`);
+  }
+}
+
+async function checkAsync(name, body) {
+  try {
+    await body();
     passed += 1;
     console.log(`ok    ${name}`);
   } catch (exc) {
@@ -1181,6 +1195,409 @@ check('the display is always exactly one line of COLUMNS characters', () => {
     lcd.displayText({ program: 5, name: 'far too long to fit' }),
   ];
   for (const line of lines) equal(line.length, lcd.COLUMNS, `"${line}" is the wrong width`);
+});
+
+// ------------------------------------------------------- the packed format ---
+//
+// The bulk-dump form of a tone is the one place in this program where the bytes
+// on the wire look nothing like the numbers the rest of it works in, so it is
+// checked against real data rather than against itself. GOLDEN_BLD is the first
+// message of MSF-HS80patches.syx, an ordinary bank file from the wild; the names
+// and values under it were produced by the alphamanager librarian, which is the
+// implementation that has been driving a real Alpha Juno-2 with them.
+
+const GOLDEN_BLD = Uint8Array.from(Buffer.from(
+  'f04137002320010000050000000c02000000080f0704010c0b0e010d0a00000f070a08000000000f'
+  + '0f000b020b060802030d0206080b0a080a000b050a020301000a090c0a0c0200000f0000000c0500'
+  + '0000080f070905010c0401020b00000f07060d0a0a00000f0f0609080e0e0b000000020c080e020c'
+  + '0a0d0a0e090b0a0e030e070e030e070000020000000c0200000008020504050b0b01040c0b0e0204'
+  + '06020900000f070f0f0e0e060d0a0d020304060b080802070a000a0f0006090c0409020a050d0500'
+  + '00060000000c02020100080b060005010d0401020b05000f0f00030f0800000f0f0e09040e04090a'
+  + '040c0303080a010b0a04020d00060a0e0e0c0a0d0e02030000f7', 'hex'));
+
+// Slot 11 of that file, in APR units -- which is what Tone.params holds.
+const GROWLYBASS = [0, 2, 2, 3, 3, 2, 3, 3, 2, 0, 1, 0, 0, 0, 127, 20, 60, 30, 0, 45,
+                    40, 0, 127, 0, 10, 0, 0, 127, 48, 50, 6, 50, 45, 16, 40, 12];
+
+check('a bulk message decodes to the tones the librarian reads out of it', () => {
+  const parsed = bank.parseBulk(GOLDEN_BLD);
+  assert(parsed !== null, 'not recognised as a bulk message');
+  equal(parsed.level, bank.LEVEL_TONE);
+  equal(parsed.firstTone, 0);
+  equal(parsed.channel, 1);
+  equal(parsed.tones.length, 4);
+  equal(parsed.tones.map((tone) => tone.displayName),
+        ['GrowlyBass', 'Muster', 'LongPWMpad', 'DarkNmusty']);
+  equal(parsed.tones[0].params, GROWLYBASS);
+});
+
+check('a decoded tone re-encodes to the bytes it came from', () => {
+  const parsed = bank.parseBulk(GOLDEN_BLD);
+  const rebuilt = bank.buildBulk(parsed.tones, 0, 1);
+  equal([...rebuilt], [...GOLDEN_BLD], 'the message did not survive the round trip');
+});
+
+check('the four-bit parameters are widened to APR units and narrowed back', () => {
+  // VCF Key Follow is stored in four bits in bulk and as 0-127 over APR, so 5 in
+  // the file has to read as 40 here -- and go back as 5. Getting this wrong is
+  // silent: the patch simply sounds different after a round trip.
+  const tone = bank.parseBulk(GOLDEN_BLD).tones[0];
+  equal(tone.params[20], 40, 'VCF Key Follow was not widened');
+  equal(tone.toPacked()[0] & 0x0F, 5, 'VCF Key Follow was not narrowed back');
+  for (const index of bank.SCALED_PARAMS) {
+    equal((tone.params[index] >> bank.APR_SCALE) << bank.APR_SCALE, tone.params[index],
+          `parameter ${index} is not a multiple of ${1 << bank.APR_SCALE}`);
+  }
+});
+
+check('bender range is four bits in both worlds and is never scaled', () => {
+  // The trap: it is stored in four bits like the five above, but its APR range is
+  // a documented 0-12, so scaling it would send 16 for a field that stops at 12.
+  const tone = bank.parseBulk(GOLDEN_BLD).tones[0];
+  equal(tone.params[35], 12, 'bender range came back wrong');
+  equal(tone.toPacked()[2] & 0x0F, 12);
+  assert(!bank.SCALED_PARAMS.has(35), 'bender range must not be in SCALED_PARAMS');
+});
+
+check('every parameter survives a round trip through the packed form', () => {
+  // Sweep each parameter to its own maximum in turn, since the packed layout
+  // gives them wildly different widths and a shared value would not exercise it.
+  for (let index = 0; index < bank.PARAM_COUNT; index += 1) {
+    const params = new Array(bank.PARAM_COUNT).fill(0);
+    params[index] = aj.PARAMETERS[index].maxValue;
+    const tone = new bank.Tone('Test-Tone1', params);
+    const back = bank.Tone.fromPacked(tone.toPacked());
+    // The scaled parameters keep four bits of resolution, which is what the
+    // format has; everything else must come back exactly.
+    const want = bank.SCALED_PARAMS.has(index)
+      ? (params[index] >> bank.APR_SCALE) << bank.APR_SCALE
+      : params[index];
+    equal(back.params[index], want, `parameter ${index} (${aj.PARAMETERS[index].name})`);
+    equal(back.name, 'Test-Tone1', `the name did not survive alongside parameter ${index}`);
+  }
+});
+
+check('a name is held to the ten characters the synth can store', () => {
+  equal(bank.sanitizeName('Fat Bass'), 'Fat Bass  ');
+  equal(bank.sanitizeName('far too long to fit'), 'far too lo');
+  // Anything unrepresentable becomes a space rather than an error: a librarian
+  // should not refuse to keep a patch over one bad character.
+  equal(bank.sanitizeName('Bass!!'), 'Bass      ');
+  equal(bank.decodeName(bank.encodeName('Zz09 -')), 'Zz09 -    ');
+});
+
+check('slots are numbered the way the front panel is', () => {
+  equal(bank.slotLabel(0), '11');
+  equal(bank.slotLabel(7), '18');
+  equal(bank.slotLabel(8), '21');
+  equal(bank.slotLabel(63), '88');
+  equal(bank.slotIndex('11'), 0);
+  equal(bank.slotIndex('88'), 63);
+  // There is no bank 0 and no bank 9; the digits never leave 1-8.
+  throwsWith(() => bank.slotIndex('09'), 'slot must be 11-88');
+  throwsWith(() => bank.slotIndex('91'), 'slot must be 11-88');
+  throwsWith(() => bank.slotLabel(64), 'slot index out of range');
+});
+
+check('a bank round-trips through .syx unchanged', () => {
+  const one = bank.Bank.fromSysex(GOLDEN_BLD);
+  equal(one.count(), 4, 'a four-tone file should list four patches, not 64');
+  const full = one.toSysex(1);
+  equal(full.length, 16 * 266, 'a bank is always written as all sixteen messages');
+  const two = bank.Bank.fromSysex(full);
+  equal(two.tones.map((t) => t.name), one.tones.map((t) => t.name));
+  equal(two.tones.map((t) => t.params), one.tones.map((t) => t.params));
+});
+
+check('stray bytes between messages do not stop a file loading', () => {
+  // Files in the wild carry padding between messages, and skipping it is what
+  // lets those banks load at all.
+  const padded = Uint8Array.from([0x00, 0xF8, ...GOLDEN_BLD, 0x00, 0x00, ...GOLDEN_BLD]);
+  equal(bank.splitMessages(padded).length, 2);
+  equal(bank.Bank.fromSysex(padded).get(0).displayName, 'GrowlyBass');
+});
+
+check('a file with no Alpha Juno tone data is refused, not half read', () => {
+  throwsWith(() => bank.Bank.fromSysex(Uint8Array.from([0xF0, 0x43, 0x00, 0xF7])),
+             'no Alpha Juno tone bulk data');
+});
+
+check('an untouched slot is empty, and a named one is still empty', () => {
+  const tone = new bank.Tone();
+  assert(tone.isEmpty, 'a fresh tone should be empty');
+  tone.name = bank.sanitizeName('Nothing');
+  assert(tone.isEmpty, 'naming a slot does not give it a sound');
+  tone.params[22] = 100;                       // VCA Level
+  assert(!tone.isEmpty, 'a slot with a level in it is not empty');
+});
+
+check('moving a patch slides the others along and says where it landed', () => {
+  const set = new bank.Bank();
+  set.tones.forEach((tone, i) => { tone.name = bank.sanitizeName(`P${i}`); });
+  equal(set.move(0, 3), undefined);
+  equal(set.tones.slice(0, 4).map((t) => t.displayName), ['P1', 'P2', 'P3', 'P0']);
+
+  const group = new bank.Bank();
+  group.tones.forEach((tone, i) => { tone.name = bank.sanitizeName(`P${i}`); });
+  // The group starts on the slot it was dropped on, whichever direction it came
+  // from -- the same rule move() follows for one, and the same rule a drop from
+  // the other pane follows.
+  equal(group.moveMany([0, 1], 5), 5);
+  equal(group.tones.slice(0, 8).map((t) => t.displayName),
+        ['P2', 'P3', 'P4', 'P5', 'P6', 'P0', 'P1', 'P7']);
+  equal(group.moveMany([5, 6], 2), 2, 'and the same going back up');
+  equal(group.tones.slice(0, 8).map((t) => t.displayName),
+        ['P2', 'P3', 'P0', 'P1', 'P4', 'P5', 'P6', 'P7']);
+  equal(group.tones.length, bank.TONE_COUNT, 'a bank always has 64 slots');
+});
+
+// ----------------------------------------------------------- bulk transfer ---
+
+function goldenBank() {
+  const set = bank.Bank.fromSysex(GOLDEN_BLD);
+  for (let i = 0; i < bank.TONE_COUNT; i += 1) {
+    if (set.get(i).isEmpty) set.set(i, new bank.Tone(`Slot${i}`, GROWLYBASS));
+  }
+  return set;
+}
+
+await checkAsync('a dump of sixteen messages is collected into a bank', async () => {
+  const set = goldenBank();
+  const seen = [];
+  const done = new Promise((resolve, reject) => {
+    const receiver = new bulk.BulkReceiver({
+      onProgress: (p) => seen.push(p.messages),
+      onDone: resolve,
+      onFail: (why) => reject(new Error(why)),
+      // Short, so the test does not sit through the real two-second idle wait.
+      idleTimeoutMs: 30,
+    });
+    receiver.start();
+    for (const message of set.toMessages(1)) receiver.feed(message);
+  });
+  const received = await done;
+  equal(received.tones.map((t) => t.name), set.tones.map((t) => t.name));
+  equal(seen[seen.length - 1], 16, 'progress should end at sixteen messages');
+});
+
+await checkAsync('a dump that never starts fails saying so', async () => {
+  const why = await new Promise((resolve) => {
+    new bulk.BulkReceiver({ onFail: resolve, startTimeoutMs: 20 }).start();
+  });
+  assert(/nothing arrived/.test(why), `unhelpful message: ${why}`);
+});
+
+await checkAsync('a dump that stops half way says how far it got', async () => {
+  const set = goldenBank();
+  const why = await new Promise((resolve) => {
+    const receiver = new bulk.BulkReceiver({ onFail: resolve, idleTimeoutMs: 20 });
+    receiver.start();
+    for (const message of set.toMessages(1).slice(0, 5)) receiver.feed(message);
+  });
+  assert(/5 of 16/.test(why), `unhelpful message: ${why}`);
+});
+
+check('anything that is not a bulk block is ignored by a listening receiver', () => {
+  const receiver = new bulk.BulkReceiver({ startTimeoutMs: 10000 });
+  receiver.start();
+  // An APR message: legal, from the same synth, and not part of a dump.
+  equal(receiver.feed(Uint8Array.from([0xF0, 0x41, 0x35, 0x00, 0x23, 0x20, 0x01, 0xF7])),
+        false);
+  equal(receiver.toneMessages, 0);
+  receiver.stop();
+});
+
+await checkAsync('a bank is sent as sixteen messages, in order', async () => {
+  const set = goldenBank();
+  const sent = [];
+  await new Promise((resolve, reject) => {
+    const sender = new bulk.BulkSender({
+      gapMs: bulk.MIN_GAP_MS,
+      send: (bytes) => sent.push(bytes),
+      onDone: resolve,
+      onFail: (why) => reject(new Error(why)),
+    });
+    sender.start(set, 1);
+  });
+  equal(sent.length, 16);
+  equal(sent.map((m) => m[8]), [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60],
+        'the messages should address slots 0, 4, 8 ... 60');
+  const rebuilt = bank.Bank.fromSysex(Uint8Array.from(sent.flatMap((m) => [...m])));
+  equal(rebuilt.tones.map((t) => t.name), set.tones.map((t) => t.name));
+});
+
+await checkAsync('cancelling a send says the synth has been left half written', async () => {
+  const set = goldenBank();
+  const why = await new Promise((resolve) => {
+    const sender = new bulk.BulkSender({
+      gapMs: bulk.MIN_GAP_MS,
+      send: () => {},
+      onFail: resolve,
+      onProgress: (p) => { if (p.messages === 3) sender.cancel(); },
+    });
+    sender.start(set, 1);
+  });
+  assert(/half-written/.test(why), `unhelpful message: ${why}`);
+});
+
+// --------------------------------------------------- MIDI files with sysex ---
+//
+// A bank saved as a .mid is the same dump wrapped in a container: delta times, a
+// length before every sysex, and channel events that may leave their status byte
+// out entirely. GOLDEN_MID below was written by mido -- an independent
+// implementation of the format -- and holds the first BLD message of
+// MSF-HS80patches.syx alongside notes that do use running status, which is the
+// case that cannot be got right by scanning for F0.
+
+const GOLDEN_MID = Uint8Array.from(Buffer.from(
+  '4d546864000000060001000201e04d54726b0000001500ff03036f6e6500903c40303c00'
+  + '00c00300ff2f004d54726b0000011100f082094137002320010000050000000c02000000'
+  + '080f0704010c0b0e010d0a00000f070a08000000000f0f000b020b060802030d0206080b'
+  + '0a080a000b050a020301000a090c0a0c0200000f0000000c05000000080f070905010c04'
+  + '01020b00000f07060d0a0a00000f0f0609080e0e0b000000020c080e020c0a0d0a0e090b'
+  + '0a0e030e070e030e070000020000000c0200000008020504050b0b01040c0b0e02040602'
+  + '0900000f070f0f0e0e060d0a0d020304060b080802070a000a0f0006090c0409020a050d'
+  + '050000060000000c02020100080b060005010d0401020b05000f0f00030f0800000f0f0e'
+  + '09040e04090a040c0303080a010b0a04020d00060a0e0e0c0a0d0e02030000f700ff2f00', 'hex'));
+
+// A small MIDI-file writer, so the awkward cases can be built rather than found.
+function vlq(value) {
+  const out = [value & 0x7F];
+  let rest = value >>> 7;
+  while (rest) { out.unshift((rest & 0x7F) | 0x80); rest >>>= 7; }
+  return out;
+}
+function chunk(id, body) {
+  const length = body.length;
+  return [...id].map((c) => c.charCodeAt(0))
+    .concat([(length >>> 24) & 255, (length >>> 16) & 255, (length >>> 8) & 255, length & 255],
+            body);
+}
+function smfFile(tracks, { format = 1, division = 480, extra = [] } = {}) {
+  const header = chunk('MThd', [(format >> 8) & 255, format & 255,
+                                (tracks.length >> 8) & 255, tracks.length & 255,
+                                (division >> 8) & 255, division & 255]);
+  return Uint8Array.from(header.concat(...extra, ...tracks.map((t) => chunk('MTrk', t))));
+}
+const END_OF_TRACK = [0x00, 0xFF, 0x2F, 0x00];
+// An F0 event carries the bytes that follow F0; the F0 itself is the event type.
+const sysexEvent = (bytes) => [0x00, 0xF0, ...vlq(bytes.length - 1), ...bytes.slice(1)];
+// An F7 "escape" event carries its bytes verbatim.
+const escapeEvent = (bytes) => [0x00, 0xF7, ...vlq(bytes.length), ...bytes];
+
+check('a MIDI file is told apart from a raw dump by what is in it', () => {
+  assert(smf.isSmf(GOLDEN_MID), 'the MThd header was not recognised');
+  assert(!smf.isSmf(GOLDEN_BLD), 'a raw .syx must not be read as a MIDI file');
+  assert(!smf.isSmf(Uint8Array.from([1, 2, 3])), 'three bytes are not a MIDI file');
+});
+
+check('sysex is unwrapped from a MIDI file written by something else', () => {
+  const { messages, format, tracks } = smf.sysexFromSmf(GOLDEN_MID);
+  equal(format, 1);
+  equal(tracks, 2);
+  equal(messages.length, 1, 'one sysex message should have come out');
+  // Byte for byte the message that went in, F0 and F7 included -- the container
+  // stores neither the same way it stores the rest.
+  equal([...messages[0]], [...GOLDEN_BLD]);
+});
+
+check('a bank reads out of a MIDI file exactly as it does out of a .syx', () => {
+  const { blob, count } = smf.sysexBlobFromSmf(GOLDEN_MID);
+  equal(count, 1);
+  const fromMid = bank.Bank.fromSysex(blob);
+  const fromSyx = bank.Bank.fromSysex(GOLDEN_BLD);
+  equal(fromMid.tones.map((t) => t.name), fromSyx.tones.map((t) => t.name));
+  equal(fromMid.tones.map((t) => t.params), fromSyx.tones.map((t) => t.params));
+});
+
+check('running status is stepped over rather than scanned past', () => {
+  // The trap this exists for: 0xF0 as a *data* byte of a running-status note.
+  // A reader that looked for F0 would start a message here and swallow the
+  // sysex that follows. Note numbers only go to 127, so the byte is put where
+  // a value legitimately can be -- pitch bend, whose LSB may be anything.
+  const track = [
+    0x00, 0xE0, 0x70, 0x40,        // pitch bend, status present
+    0x00, 0x70, 0x40,              //   ... and again, running
+    0x00, 0x0F, 0x40,              //   ... a low data byte
+    ...sysexEvent([...GOLDEN_BLD]),
+    ...END_OF_TRACK,
+  ];
+  const { messages } = smf.sysexFromSmf(smfFile([track], { format: 0 }));
+  equal(messages.length, 1);
+  equal([...messages[0]], [...GOLDEN_BLD]);
+});
+
+check('a sysex split across several events is put back together', () => {
+  // 266 bytes is more than some writers put in one event, so a dump arrives as
+  // an F0 packet that does not end in F7 followed by F7 continuation packets.
+  const whole = [...GOLDEN_BLD];
+  const head = whole.slice(0, 100);
+  const middle = whole.slice(100, 200);
+  const tail = whole.slice(200);
+  const track = [
+    0x00, 0xF0, ...vlq(head.length - 1), ...head.slice(1),
+    0x00, 0xF7, ...vlq(middle.length), ...middle,
+    0x00, 0xF7, ...vlq(tail.length), ...tail,
+    ...END_OF_TRACK,
+  ];
+  const { messages } = smf.sysexFromSmf(smfFile([track]));
+  equal(messages.length, 1, 'the three packets should have made one message');
+  equal([...messages[0]], whole);
+});
+
+check('a whole message inside an escape event is taken as well', () => {
+  const track = [...escapeEvent([...GOLDEN_BLD]), ...END_OF_TRACK];
+  const { messages } = smf.sysexFromSmf(smfFile([track]));
+  equal(messages.length, 1);
+  equal([...messages[0]], [...GOLDEN_BLD]);
+});
+
+check('a sysex that was cut off is dropped, not handed on half read', () => {
+  // A tone built from a truncated message would be a patch with rubbish in it,
+  // which is worse than one patch fewer and much harder to notice.
+  const cut = [...GOLDEN_BLD].slice(0, 120);
+  const track = [0x00, 0xF0, ...vlq(cut.length - 1), ...cut.slice(1), ...END_OF_TRACK];
+  const { messages } = smf.sysexFromSmf(smfFile([track]));
+  equal(messages.length, 0);
+});
+
+check('several tracks are read, and unknown chunks are skipped by their length', () => {
+  const a = [...sysexEvent([...GOLDEN_BLD]), ...END_OF_TRACK];
+  const b = [...sysexEvent([...GOLDEN_BLD]), ...END_OF_TRACK];
+  // A chunk of a type nobody knows, carrying bytes that look like a sysex. The
+  // format says to skip it by its length, and a reader that does not will find
+  // patches that are not in the file.
+  const junk = chunk('XFIH', [...GOLDEN_BLD]);
+  const file = smfFile([a, b], { extra: [junk] });
+  const { messages } = smf.sysexFromSmf(file);
+  equal(messages.length, 2, 'the unknown chunk should have been stepped over');
+});
+
+check('a MIDI file with no sysex in it reports nothing, rather than failing', () => {
+  const track = [0x00, 0x90, 0x3C, 0x40, 0x30, 0x3C, 0x00, ...END_OF_TRACK];
+  const { messages, tracks } = smf.sysexFromSmf(smfFile([track], { format: 0 }));
+  equal(messages.length, 0);
+  equal(tracks, 1);
+  // Which is a different problem from a file that is not a MIDI file at all, and
+  // the librarian says so differently.
+  throwsWith(() => smf.sysexFromSmf(Uint8Array.from([0x46, 0x4F, 0x52, 0x4D, 0, 0, 0, 0,
+                                                     0, 0, 0, 0, 0, 0])),
+             'does not start with a MIDI file header');
+});
+
+check('a MIDI file inside a RIFF wrapper is unwrapped first', () => {
+  const inner = smfFile([[...sysexEvent([...GOLDEN_BLD]), ...END_OF_TRACK]]);
+  const size = inner.length;
+  const riff = Uint8Array.from([
+    ...[...'RIFF'].map((c) => c.charCodeAt(0)),
+    0, 0, 0, 0,                                        // the RIFF size, unread
+    ...[...'RMID'].map((c) => c.charCodeAt(0)),
+    ...[...'data'].map((c) => c.charCodeAt(0)),
+    size & 255, (size >>> 8) & 255, (size >>> 16) & 255, (size >>> 24) & 255,
+    ...inner,
+  ]);
+  assert(smf.isSmf(riff), 'an RMID file was not recognised');
+  equal(smf.sysexFromSmf(riff).messages.length, 1);
 });
 
 // ------------------------------------------------------------------- done ---

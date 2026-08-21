@@ -16,8 +16,16 @@ import { MoveDetector, LEARN_MOVE_THRESHOLD } from './learn.js';
 import { SysexStream, parseToneMessage } from './tone_in.js';
 import { Lcd, patchLabel } from './lcd.js';
 import { PresetBank, SLOT_COUNT, isComplete, knownCount, slotLabel } from './presets.js';
+import { Bank, parseBulk, slotLabel as bankSlotLabel } from './bank.js';
+import { BulkReceiver, BulkSender, DEFAULT_GAP_MS } from './bulk.js';
+import { PatchPane } from './library.js';
+import { isSmf, sysexBlobFromSmf } from './smf.js';
 
 const STORE_KEY = 'cc2juno.web.config';
+// The four things the top bar switches between. Three of them have the mapping
+// running; only Configure does not, which is the distinction performing() draws
+// and the one nearly every check below actually cares about.
+const MODES = ['config', 'perform', 'manager', 'live'];
 // Presets are kept apart from the configuration, and not in the exported YAML at
 // all. The config file describes a controller and is read by the Python and
 // Tulip builds as well; a preset describes a sound, is written far more often,
@@ -31,8 +39,8 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   cfg: cfgmod.makeConfig(),
-  mode: 'config',
-  view: 'grid',           // 'grid' or 'pg300', and only while performing
+  mode: 'config',         // one of MODES
+  view: 'grid',           // 'grid' or 'pg300', wherever the controls are drawn
   editLayer: 0,           // the layer being edited, which Perform ignores
   selected: null,         // index into layout.ccs, or null
   learning: null,         // index of the cell being learned, or null
@@ -46,7 +54,24 @@ const state = {
   // read by the Python and Tulip builds too, and a key only one of the three
   // understands does not belong in a file all three write.
   synthInputName: null,
+  // Which list Live Patch plays from: 'source' (the open file) or 'working' (the
+  // synth-memory pane). Only offered once the memory pane holds something.
+  liveView: 'source',
+  // The display given over to a transfer, or null for the patch it normally
+  // reports. See patchReading(); a bulk transfer is five to ten seconds of the
+  // screen being more use as a progress readout than as a patch name.
+  lcdMessage: null,
 };
+
+/** True in every mode that has the mapping running, which is everything but Configure. */
+function performing() {
+  return state.mode !== 'config';
+}
+
+/** True where the knob grid or the PG-300 is on screen. */
+function showsControls() {
+  return state.mode !== 'manager';
+}
 
 const ports = new MidiPorts();
 const synthStream = new SysexStream();
@@ -57,7 +82,7 @@ const router = new Router(state.cfg, {
   send: (bytes) => { if (ports.output) blink('out'); ports.send(bytes); },
   log: (entry) => logEntry(entry),
   onKnob: (event) => onKnobActivity(event),
-  onSent: () => { if (state.mode === 'perform') refreshStage(); },
+  onSent: () => { if (performing()) refreshStage(); },
   onLayer: () => { refresh(); },
 });
 
@@ -116,6 +141,7 @@ function worthLighting(data) {
 let knobs = [];
 let panel = null;         // the PG-300, built the first time it is asked for
 let lcd = null;           // the display over the grid; the panel draws its own
+let headerLcd = null;     // and a third in the top bar, for Patch Manager
 let bank = new PresetBank(SLOT_COUNT);
 const presetButtons = { recall: [], store: [] };   // built once, then updated
 const seenUnmapped = new Set();   // `${layer}:${cc}`, so each is reported once
@@ -124,7 +150,7 @@ const seenInactive = new Set();
 // ------------------------------------------------------------- utilities ---
 
 function activeLayerIndex() {
-  return state.mode === 'perform' ? router.layer : state.editLayer;
+  return performing() ? router.layer : state.editLayer;
 }
 
 function activeLayer() {
@@ -141,7 +167,7 @@ function isLayerCc(cc) {
 
 /** True when the stage is showing the PG-300 rather than the knob grid. */
 function showingPanel() {
-  return state.mode === 'perform' && state.view === 'pg300';
+  return showsControls() && state.mode !== 'config' && state.view === 'pg300';
 }
 
 /**
@@ -228,6 +254,7 @@ function save() {
         mode: state.mode,
         view: state.view,
         sideHidden: state.sideHidden,
+        liveView: state.liveView,
         editLayer: state.editLayer,
       }));
     } catch (exc) {
@@ -251,9 +278,10 @@ function restore() {
     state.outputName = stored.outputName || null;
     state.synthInputName = stored.synthInputName || null;
     state.editLayer = Math.min(stored.editLayer || 0, state.cfg.layers.length - 1);
-    state.mode = stored.mode === 'perform' ? 'perform' : 'config';
+    state.mode = MODES.includes(stored.mode) ? stored.mode : 'config';
     state.view = stored.view === 'pg300' ? 'pg300' : 'grid';
     state.sideHidden = stored.sideHidden === true;
+    state.liveView = stored.liveView === 'working' ? 'working' : 'source';
     router.setConfig(state.cfg);
     return true;
   } catch (exc) {
@@ -325,7 +353,7 @@ async function enableMidi() {
     // The page opens in Perform, before there are any ports to name, so the
     // running banner waits until there are rather than printing a list of
     // 'none'. Switching modes prints it again, as it always did.
-    if (state.mode === 'perform') logStartup();
+    if (performing()) logStartup();
     refresh();
   } catch (exc) {
     setStatus('bad', 'no access');
@@ -411,6 +439,10 @@ function chooseInput(port) {
 function chooseOutput(port) {
   ports.setOutput(port);
   state.outputName = port ? port.name : null;
+  // The librarian complains once when there is nowhere to send a patch. Choosing
+  // a synth is the fix, so it earns the right to complain again if it ever stops
+  // being true.
+  if (port) library.warnedNoOutput = false;
   state.cfg.portOutput = state.outputName;
   // The synth just changed, so a guess made from the old one is worse than a
   // fresh guess. One made by hand is left alone.
@@ -439,7 +471,7 @@ function updateStatus() {
     setStatus('bad', 'no synth');
   } else if (!ports.input) {
     setStatus('bad', 'no controller');
-  } else if (state.mode === 'perform') {
+  } else if (performing()) {
     setStatus('on', 'running');
   } else {
     setStatus('on', 'ready');
@@ -467,7 +499,7 @@ function onMidiMessage(data) {
     return;
   }
 
-  if (state.mode === 'perform') {
+  if (performing()) {
     router.handle(data);
     return;
   }
@@ -498,8 +530,22 @@ function onSynthMessage(data) {
 }
 
 function onSynthSysex(bytes) {
+  // A transfer in progress gets first refusal. Bulk blocks are not tone messages
+  // and parseToneMessage would drop them on the floor.
+  if (library.receiver && library.receiver.feed(bytes)) return;
+
   const message = parseToneMessage(bytes);
   if (!message) {
+    // A dump nobody asked for: the player pressed BULK DUMP before pressing
+    // Receive, which is an easy order to get wrong and looks from the front like
+    // the synth ignoring the button. Said once, because sixteen messages are
+    // about to arrive and sixteen copies of this would bury the log.
+    if (parseBulk(bytes) && !library.sawUnsolicitedDump) {
+      library.sawUnsolicitedDump = true;
+      logSynth('synth    -> the synth is sending a bulk dump, and nothing is listening. '
+               + 'Open Patch Manager and press Receive first, then press '
+               + 'DATA TRANSFER + WRITE + 1 BULK DUMP again.', 'unmapped');
+    }
     if (state.verbose) logSynth(`    ignored: ${aj.hexString(bytes)}`, 'sysex');
     return;
   }
@@ -533,11 +579,11 @@ function onSynthProgram(channel, program) {
   router.setPatch(program);
   logSynth(`synth    -> patch ${patchLabel(program) || program}`, 'layer');
   refreshStage();
-  if (state.mode === 'perform') renderSummary();
+  if (performing()) renderSummary();
 }
 
 function logSynth(text, kind) {
-  if (state.mode === 'perform') logLine(text, kind);
+  if (performing()) logLine(text, kind);
 }
 
 // -------------------------------------------------------------- knob grid ---
@@ -599,7 +645,7 @@ function refreshKnobs() {
         fraction: position === undefined ? ((low + high) / 2) / 127 : position / 127,
         selected: state.selected === i,
         learning: state.learning === i,
-        draggable: state.mode === 'perform',
+        draggable: performing(),
       });
       return;
     }
@@ -629,7 +675,7 @@ function refreshKnobs() {
     else if (mapping.mode === 'clamp') detail.push('clamp');
     // Only in Perform is there a live value to be stale about; in Configure the
     // grid is a plan of the controller, not a picture of the synth.
-    const stale = state.mode === 'perform' && reading.stale;
+    const stale = performing() && reading.stale;
     knob.update({
       kind: 'assigned',
       name: param.name,
@@ -643,7 +689,7 @@ function refreshKnobs() {
       title: titleFor(param, stale, reading.synced),
       selected: state.selected === i,
       learning: state.learning === i,
-      draggable: state.mode === 'perform',
+      draggable: performing(),
     });
   });
 }
@@ -679,7 +725,7 @@ function onKnobActivity({ cc }) {
 /** A knob dragged on screen behaves exactly like the same CC arriving. */
 function onLocalKnob(cell, value) {
   const cc = state.cfg.layout.ccs[cell];
-  if (cc === null || state.mode !== 'perform') return;
+  if (cc === null || !performing()) return;
   router.handleLocalCc(cc, value);
 }
 
@@ -734,7 +780,7 @@ function panelReadings() {
  * behind it and is sent as itself.
  */
 function onPanelInput(paramIndex, value) {
-  if (state.mode !== 'perform') return;
+  if (!performing()) return;
   const param = aj.PARAMETERS[paramIndex];
   for (const [cc, mapping] of state.cfg.layers[router.layer].byCc) {
     if (mapping.paramIndex !== paramIndex) continue;
@@ -754,7 +800,6 @@ function refreshPanel() {
     $('pg300-host').append(panel.el);
   }
   panel.update(panelReadings());
-  panel.setPatch(patchReading());
 }
 
 // ----------------------------------------------------------------- presets ---
@@ -903,7 +948,7 @@ function recallPreset(index) {
   refreshStage();
   renderSummary();
   if (!sent) return;
-  if (state.mode === 'perform' && !ports.output) {
+  if (performing() && !ports.output) {
     banner('warn', 'No synth chosen, so the preset was not sent anywhere.');
   }
 }
@@ -918,25 +963,74 @@ function recallPreset(index) {
  * missing, and the display is built to say so rather than to wait.
  */
 function patchReading() {
-  // A recalled preset takes the screen over. The sound loaded is the one in that
-  // slot, not the patch whose number the synth last announced -- and the synth's
-  // own display has no way of saying so, since it does not know the slot exists.
+  // A transfer takes the screen over entirely: for the five to ten seconds a
+  // bulk load runs, "SEND 07/16" is worth more than the name of whatever patch
+  // happens to be in the edit buffer.
+  if (state.lcdMessage !== null) return { text: state.lcdMessage };
+  // A recalled preset -- or a patch played out of a file -- takes it next. The
+  // sound loaded is the one in that slot, not the patch whose number the synth
+  // last announced, and the synth's own display has no way of saying so since it
+  // does not know the slot exists.
   if (router.recalled) {
     return { slot: router.recalled.slot, name: router.recalled.name };
   }
   return { program: router.patch, name: router.toneName };
 }
 
-function refreshLcd() {
-  if (!lcd) {
-    lcd = new Lcd();
-    $('lcd-host').append(lcd.el);
+/**
+ * Put a line on the display until told otherwise, or for a moment.
+ *
+ * Passing null hands the screen back to whatever patch is loaded. A `holdMs`
+ * hands it back on a timer, which is what the end of a transfer wants: "DONE 64
+ * PATCHES" is worth reading, and worth getting out of the way by itself.
+ */
+let lcdTimer = null;
+function setLcdMessage(text, { holdMs = 0 } = {}) {
+  if (lcdTimer !== null) { clearTimeout(lcdTimer); lcdTimer = null; }
+  state.lcdMessage = text;
+  if (text !== null && holdMs) {
+    lcdTimer = setTimeout(() => { lcdTimer = null; state.lcdMessage = null; refreshLcd(); },
+                          holdMs);
   }
-  lcd.set(patchReading());
+  refreshLcd();
+}
+
+/**
+ * Both displays, wherever they are.
+ *
+ * There are three of them and only ever one or two on screen: the PG-300 draws
+ * its own into its SVG, the knob grid has one above it, and Patch Manager has a
+ * third in the top bar because it shows neither of the other two. They all read
+ * the same line, so they are all set from the same place rather than each being
+ * remembered to.
+ */
+function refreshLcd() {
+  const reading = patchReading();
+  if (showsControls() && !showingPanel()) {
+    if (!lcd) {
+      lcd = new Lcd();
+      $('lcd-host').append(lcd.el);
+    }
+    lcd.set(reading);
+  }
+  if (state.mode === 'manager') {
+    if (!headerLcd) {
+      headerLcd = new Lcd();
+      $('header-lcd').append(headerLcd.el);
+    }
+    headerLcd.set(reading);
+  }
+  if (showingPanel() && panel) panel.setPatch(reading);
 }
 
 /** Redraw whichever of the two views the stage is showing. */
 function refreshStage() {
+  // Patch Manager draws neither view. Its display still wants keeping up to
+  // date, which is the one thing the two modes have in common.
+  if (!showsControls()) {
+    refreshLcd();
+    return;
+  }
   // The preset row sits under both views and outlives the switch between them.
   // It is redrawn here rather than only in refresh() because what it can offer
   // changes with the traffic: the parameter that just went out may have been the
@@ -944,6 +1038,7 @@ function refreshStage() {
   renderPresets();
   if (showingPanel()) {
     refreshPanel();
+    refreshLcd();
     return;
   }
   refreshKnobs();
@@ -966,7 +1061,7 @@ function renderLayerBar() {
   if (state.cfg.layers.length === 1) {
     const only = document.createElement('span');
     only.className = 'stage-note';
-    only.textContent = state.mode === 'perform'
+    only.textContent = performing()
       ? 'One layer'
       : 'One layer — add more in the Layers panel';
     bar.append(only);
@@ -987,7 +1082,7 @@ function renderLayerBar() {
     const count = layer.byCc.size;
     chip.title = `${count} knob${count === 1 ? '' : 's'} mapped on this layer`;
     chip.addEventListener('click', () => {
-      if (state.mode === 'perform') router.setLayer(index);
+      if (performing()) router.setLayer(index);
       else { state.editLayer = index; save(); refresh(); }
     });
     bar.append(chip);
@@ -997,7 +1092,7 @@ function renderLayerBar() {
 function renderStageNote() {
   const note = $('stage-note');
   note.replaceChildren();
-  if (state.mode === 'perform') {
+  if (performing()) {
     if (!cfgmod.isLayered(state.cfg)) return;
     // Until the layer knob is touched its real position is unknowable, so say
     // out loud which layer is only being assumed. Being wrong about that is the
@@ -1356,7 +1451,7 @@ function renderSummary() {
   // at once and they are different facts: the synth is still sitting on the
   // patch it announced, and this is what has since been sent over the top of it.
   if (router.recalled) {
-    rows.push(['Preset',
+    rows.push(['Loaded here',
                [router.recalled.slot, router.recalled.name].filter(Boolean).join('  ')]);
   }
 
@@ -1385,7 +1480,7 @@ function logLine(text, kind) {
 const pad = (value, width) => String(value).padEnd(width);
 
 function logEntry(entry) {
-  if (state.mode !== 'perform') return;
+  if (!performing()) return;
   const cfg = state.cfg;
 
   switch (entry.kind) {
@@ -1437,12 +1532,14 @@ function logEntry(entry) {
     }
     case 'recall': {
       const named = entry.name ? ` "${entry.name}"` : '';
+      // A preset slot and a patch out of a file both arrive here; the slot label
+      // is what tells them apart, and it is what the display is showing too.
+      const from = entry.slot ? `${entry.slot}${named}` : `preset${named}`;
       // Saying how many of the 36 are actually going out matters: the rest were
       // skipped because the synth already has them, and a recall that reports
       // "0 parameters" is the correct and reassuring answer to recalling the
       // preset that is already loaded.
-      logLine(`preset${named} -> sending ${entry.queued} of ${entry.total} parameters`,
-              'layer');
+      logLine(`${from} -> sending ${entry.queued} of ${entry.total} parameters`, 'layer');
       break;
     }
     case 'sysex': {
@@ -1568,6 +1665,611 @@ function exportConfig() {
                + 'command-line and Tulip versions.');
 }
 
+// --------------------------------------------------------------- library ---
+
+/**
+ * The two patch panes, and the transfers that fill and empty them.
+ *
+ * The left pane is a picture of the synth's own 64 memories and the right one is
+ * whatever file is open. Both play what you click on, and neither writes anything
+ * to the instrument until you say so, because on this synth those are genuinely
+ * different acts:
+ *
+ *   Auditioning sends 36 parameter messages into the edit buffer. It is instant,
+ *   it is undoable by turning the patch knob, and it carries no name and no slot
+ *   number -- the synth has no way to be told either, and ignores them if sent.
+ *   Whatever cc2juno calls the patch is cc2juno's business alone, which is why
+ *   the display says T-something rather than M-something.
+ *
+ *   Writing means the whole bank at once. An Alpha Juno-2 armed for BULK LOAD
+ *   waits for all sixteen messages and commits nothing until they arrive, so
+ *   there is no such thing as writing one slot from here. The way to keep one
+ *   sound is to audition it and press WRITE on the synth; the way to keep a set
+ *   is to build it in the left pane and send the lot.
+ *
+ * That asymmetry is the whole reason the left pane exists: reordering, renaming
+ * and filling in 64 slots is only worth doing because the transfer is all or
+ * nothing.
+ */
+const library = {
+  built: false,
+  working: null,        // PatchPane over the synth's 64 memories
+  source: null,         // PatchPane over the open file
+  middle: null,         // the copy and move buttons between them
+  receiver: null,
+  sender: null,
+  // Remembered rather than fixed, because the value that works is a property of
+  // the interface and the synth, not of one transfer. See bulk.js.
+  gapMs: DEFAULT_GAP_MS,
+  syxTarget: 'source',  // which pane the file picker is opening into
+  sawUnsolicitedDump: false,
+  warnedNoOutput: false,
+  warnedMidiBeta: false,
+};
+
+function logLibrary(text) {
+  logLine(text, 'layer');
+}
+
+/**
+ * `managerOnly` marks a button that belongs to organising rather than to playing.
+ * The same pane element is shown in Live Patch, where the column is a third of
+ * the width and writing the synth's memory is not what anyone came to do, so
+ * those buttons are hidden there by CSS rather than by rebuilding the pane.
+ */
+function paneButton(label, title, onClick, { primary = false, managerOnly = false } = {}) {
+  const button = document.createElement('button');
+  button.className = (primary ? 'primary small' : 'small') + (managerOnly ? ' manager-only' : '');
+  button.textContent = label;
+  button.title = title;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function buildLibrary() {
+  if (library.built) return;
+  library.built = true;
+
+  library.working = new PatchPane({
+    title: 'Synth memory',
+    editable: true,
+    showEmpty: true,
+    onAudition: (index, tone) => auditionTone(index, tone),
+    onChange: (what) => logLibrary(`memory   ${what}`),
+    onSelect: () => updateLibraryButtons(),
+  });
+  library.working.setBank(new Bank(), 'empty — receive a dump, or drag patches in');
+
+  library.source = new PatchPane({
+    title: 'Patch file',
+    editable: false,
+    showEmpty: false,
+    emptyHint: 'Open a bank file to list the patches in it — a raw .syx dump, or a '
+             + '.mid with the dump saved inside it. Click a patch to hear it on the '
+             + 'synth straight away; drag it into the synth memory to keep it in a set.',
+    onAudition: (index, tone) => auditionTone(index, tone),
+    onSelect: () => updateLibraryButtons(),
+  });
+
+  library.working.actions.append(
+    paneButton('Receive', 'Capture a bulk dump from the synth into this pane',
+               receiveDump, { managerOnly: true }),
+    // Deliberately not the primary button. It overwrites all 64 patches in the
+    // instrument, and the brightest thing on a screen should not be the one act
+    // that cannot be undone; the dialog's Continue is where the emphasis belongs,
+    // by which point the warning has been read.
+    paneButton('Send all 64', 'Write every patch in this pane to the synth’s memory',
+               sendBankToSynth, { managerOnly: true }),
+    paneButton('Open…', 'Open a bank file straight into this pane — a raw .syx dump, '
+                        + 'or a .mid with the dump saved inside it',
+               () => openSyx('working'), { managerOnly: true }),
+    paneButton('Save .syx', 'Write this pane out as a .syx file', exportSyx,
+               { managerOnly: true }),
+    paneButton('New set', 'Empty all 64 slots and start again', newSet,
+               { managerOnly: true }),
+  );
+
+  library.source.actions.append(
+    paneButton('Open .syx…', 'Open a bank file to browse — a raw .syx dump, or a .mid '
+                             + 'with the dump saved inside it',
+               () => openSyx('source')),
+  );
+
+  library.middle = document.createElement('div');
+  library.middle.className = 'manager-middle';
+  library.middle.append(
+    paneButton('◀ Copy', 'Copy the patches selected on the right into the synth '
+                              + 'memory, starting at whichever slot is selected there',
+               copyFromSource),
+    paneButton('◀ Copy All', 'Copy every patch in the file into the synth memory, '
+                             + 'starting at slot 11 — the whole file as a set',
+               copyAllFromSource),
+    paneButton('Move ▲', 'Swap the selected patch with the one above it',
+               () => library.working.nudge(-1)),
+    paneButton('Move ▼', 'Swap the selected patch with the one below it',
+               () => library.working.nudge(1)),
+    paneButton('Clear', 'Empty the selected slots', () => library.working.clearSelected()),
+  );
+  // Which of the two lists Live Patch is showing. It is a pair of buttons rather
+  // than a menu because there are two of them and both are worth naming.
+  library.liveSwitch = document.createElement('div');
+  library.liveSwitch.className = 'view-switch live-switch';
+  library.liveSwitch.setAttribute('role', 'tablist');
+  library.liveSwitch.setAttribute('aria-label', 'Which patches to play from');
+  for (const [view, label, title] of [
+    ['source', 'Patch file', 'Play the patches in the open .syx file'],
+    ['working', 'Synth memory', 'Play the patches held in the Patch Manager’s '
+                                + 'synth-memory pane'],
+  ]) {
+    const button = document.createElement('button');
+    button.setAttribute('role', 'tab');
+    button.textContent = label;
+    button.title = title;
+    button.dataset.view = view;
+    button.addEventListener('click', () => setLiveView(view));
+    library.liveSwitch.append(button);
+  }
+
+  updateLibraryButtons();
+}
+
+/** Which list Live Patch plays from. Remembered, since it is a way of working. */
+function setLiveView(view) {
+  if (state.liveView === view) return;
+  state.liveView = view;
+  save();
+  refresh();
+}
+
+/**
+ * Put the panes where the current mode wants them.
+ *
+ * The source pane is one element that gets moved between the two modes rather
+ * than one per mode. A DOM node keeps its listeners and its state when it is
+ * re-parented, so this costs nothing and buys the thing that matters: a file
+ * opened in Patch Manager is already open in Live Patch, scrolled to the same
+ * place, with the same patch selected. Two panes over one bank would have had to
+ * be kept in step by hand, and eventually would not have been.
+ */
+function showLibrary() {
+  if (state.mode !== 'manager' && state.mode !== 'live') return;
+  buildLibrary();
+
+  if (state.mode === 'manager') {
+    const host = $('manager');
+    if (!host.contains(library.working.el)) host.append(library.working.el, library.middle);
+    if (library.source.el.parentElement !== host) host.append(library.source.el);
+  } else {
+    const host = $('live-pane');
+    // Only offer the synth's memory once there is something in it. An empty set
+    // is 64 blank rows and nothing to play, and a switch that leads to that is
+    // worse than no switch.
+    const haveMemory = library.working.bank.count() > 0;
+    if (!haveMemory) state.liveView = 'source';
+    const pane = state.liveView === 'working' ? library.working : library.source;
+
+    library.liveSwitch.hidden = !haveMemory;
+    for (const button of library.liveSwitch.children) {
+      button.classList.toggle('is-active', button.dataset.view === state.liveView);
+    }
+    if (library.liveSwitch.parentElement !== host) host.append(library.liveSwitch);
+    if (pane.el.parentElement !== host) host.append(pane.el);
+    // The pane not being shown goes back to the manager, so that switching to
+    // Patch Manager finds both of them where it left them.
+    const other = pane === library.working ? library.source : library.working;
+    if (other.el.parentElement === host) other.el.remove();
+  }
+  updateLibraryButtons();
+}
+
+/** Buttons that act on a selection, greyed when there is nothing selected. */
+function updateLibraryButtons() {
+  if (!library.built) return;
+  const [copy, copyAll, up, down, clear] = library.middle.children;
+  copy.disabled = library.source.selection.size === 0;
+  copyAll.disabled = library.source.bank.count() === 0;
+  const one = library.working.current !== null;
+  up.disabled = !one;
+  down.disabled = !one;
+  clear.disabled = library.working.selection.size === 0;
+}
+
+/**
+ * Play a patch on the synth without writing anything to its memory.
+ *
+ * This is the same path a preset recall takes -- 36 messages through the same
+ * rate-limited queue -- so the knob grid, the PG-300 and the display all follow
+ * it without being told to, and the sliders arrive at the new sound before the
+ * last message has left. The slot on the display is a T number because that is
+ * the truth: the sound is in the edit buffer, it came from here, and the synth
+ * has no idea which patch of ours it is.
+ */
+function auditionTone(index, tone) {
+  const label = `T${bankSlotLabel(index)}`;
+  // Whatever a transfer left on the screen is stale the moment a patch is played.
+  setLcdMessage(null);
+  router.sendTone(tone.params, { slot: label, name: tone.displayName });
+  if (!ports.output && !library.warnedNoOutput) {
+    // Once. This mode is built for clicking down a list, and a banner per click
+    // would bury the list under its own complaints.
+    library.warnedNoOutput = true;
+    banner('warn', 'No synth chosen, so the patch was not sent anywhere. Pick the '
+                   + 'synth’s MIDI in under "To Synth" in the top bar.', { sticky: true });
+  }
+  refreshStage();
+  renderSummary();
+}
+
+// ------------------------------------------------------------ patch files ---
+
+function openSyx(target) {
+  library.syxTarget = target;
+  $('syx-input').click();
+}
+
+/**
+ * Open a patch file, which may be a raw dump or a MIDI file with one inside it.
+ *
+ * The two are told apart by what is in the file rather than by its name: plenty
+ * of bank dumps are saved as .mid, and plenty of MIDI files are named .syx by a
+ * transfer that did not know better. `isSmf` looks for the MThd header, which is
+ * the only honest answer either way.
+ */
+async function loadSyx(file) {
+  const raw = new Uint8Array(await file.arrayBuffer());
+  let bytes = raw;
+  let unwrapped = null;
+
+  if (isSmf(raw)) {
+    let found;
+    try {
+      found = sysexBlobFromSmf(raw);
+    } catch (exc) {
+      banner('error', `${file.name}: this is a MIDI file, but it could not be read — `
+                      + `${exc.message}.`, { sticky: true });
+      return;
+    }
+    if (!found.count) {
+      banner('error', `${file.name}: this is a MIDI file (format ${found.format}, `
+                      + `${found.tracks} track${found.tracks === 1 ? '' : 's'}) but there `
+                      + 'is no system exclusive data anywhere in it, so there are no '
+                      + 'patches to read. A bank saved as a MIDI file carries the dump '
+                      + 'as sysex events; one holding only notes cannot.', { sticky: true });
+      return;
+    }
+    bytes = found.blob;
+    unwrapped = found;   // blob, count, format, tracks -- and the messages themselves
+  }
+
+  let bank;
+  try {
+    bank = Bank.fromSysex(bytes);
+  } catch (exc) {
+    banner('error', unwrapped
+      ? `${file.name}: ${exc.message}. ${describeForeignSysex(unwrapped)}`
+      : `${file.name}: ${exc.message}. A patch file for this synth is a bulk dump — `
+        + 'the same bytes the Alpha Juno sends on DATA TRANSFER, BULK DUMP — either '
+        + 'raw (.syx) or saved inside a MIDI file (.mid).', { sticky: true });
+    return;
+  }
+  const pane = library.syxTarget === 'working' ? library.working : library.source;
+  pane.setBank(bank, file.name);
+  const count = bank.count();
+  banner('ok', `Opened ${file.name}: ${count} patch${count === 1 ? '' : 'es'}.`);
+  logLibrary(`file     ${file.name} — ${count} patch(es) read`);
+  if (unwrapped) {
+    logLibrary(`         unwrapped from a format ${unwrapped.format} MIDI file, `
+               + `${unwrapped.tracks} track(s), ${unwrapped.count} sysex message(s)`);
+    // Said once. Reading patches out of a MIDI file is new and has been tested
+    // against files this program generated rather than against the ones a
+    // sequencer or an old librarian writes, so a wrong answer is more likely here
+    // than anywhere else in the librarian -- and a patch list that looks slightly
+    // wrong is exactly the sort of thing a user would blame on their own memory.
+    if (!library.warnedMidiBeta) {
+      library.warnedMidiBeta = true;
+      banner('warn', 'Reading patches out of a MIDI file is new and not yet tested '
+                     + 'against files from the wild. Check the patch names look right '
+                     + 'before writing anything to the synth — and if they do not, the '
+                     + 'file would be very welcome as a bug report.');
+    }
+  }
+  // The file records the channel it was dumped on. It is not adopted, because the
+  // channel this program sends on is a setting the other builds share; but a
+  // mismatch is worth one line, since it is the usual reason a transfer does
+  // nothing at all.
+  if (bank.channel !== state.cfg.synthChannel) {
+    logLibrary(`         it was dumped on MIDI channel ${bank.channel}; cc2juno is set `
+               + `to channel ${state.cfg.synthChannel}`);
+  }
+  if (bank.extraBlocks.length) {
+    logLibrary(`         ${bank.extraBlocks.length} MKS-50 patch/chord block(s) kept `
+               + 'and written back unchanged');
+  }
+  refresh();
+}
+
+/**
+ * Why a MIDI file full of sysex still held no patches.
+ *
+ * Two very different disappointments look the same from the outside, and the
+ * answer to each is different: a file for another instrument is the wrong file,
+ * while a file of Alpha Juno messages that are not bulk dumps is the right synth
+ * saved the wrong way — a recording of someone editing, most likely, which no
+ * librarian can turn back into a bank.
+ */
+function describeForeignSysex({ messages, count }) {
+  const roland = messages.filter((m) => m.length > 4 && m[1] === 0x41 && m[4] === 0x23);
+  if (!roland.length) {
+    return `${count} system exclusive message(s) were found in the MIDI file, but none `
+         + 'of them is for an Alpha Juno — the file is most likely for a different '
+         + 'instrument.';
+  }
+  return `${roland.length} of the ${count} system exclusive message(s) in the file are `
+       + 'Alpha Juno messages, but none is a tone bulk dump. A recording of parameter '
+       + 'edits is not a bank and cannot be turned into one; what is needed is the file '
+       + 'the synth sends on DATA TRANSFER, WRITE, 1 BULK DUMP.';
+}
+
+function exportSyx() {
+  const bank = library.working.bank;
+  const blob = new Blob([bank.toSysex(state.cfg.synthChannel)],
+                        { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'alpha-juno-bank.syx';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  banner('ok', 'Wrote alpha-juno-bank.syx — all 64 slots, on MIDI channel '
+               + `${state.cfg.synthChannel}. Any librarian for this synth will read it.`);
+  logLibrary('file     wrote alpha-juno-bank.syx (64 slots)');
+}
+
+function newSet() {
+  if (!confirm('Empty all 64 slots of the synth memory pane? '
+               + 'Nothing is sent to the synth, and the open file is untouched.')) {
+    return;
+  }
+  library.working.setBank(new Bank(), 'empty — receive a dump, or drag patches in');
+  logLibrary('memory   emptied all 64 slots');
+  updateLibraryButtons();
+}
+
+function copyFromSource() {
+  const rows = library.source.selected;
+  if (!rows.length) return;
+  const target = library.working.current ?? 0;
+  library.working.place(rows.map((i) => library.source.bank.get(i)), target);
+  updateLibraryButtons();
+}
+
+/**
+ * The whole file, as the set.
+ *
+ * From slot 11 rather than from whatever is selected, unlike Copy. This is the
+ * "make this file my set" button, and starting it half way down the memory --
+ * because a row happened to be selected -- would put patches somewhere nobody
+ * asked for and quietly drop the ones that ran off the end. Selecting on the
+ * right and using Copy is the way to place them anywhere else.
+ */
+function copyAllFromSource() {
+  const rows = library.source.bank.occupied();
+  if (!rows.length) return;
+  const holding = library.working.bank.count();
+  if (holding && !confirm(`Copy ${rows.length} patch(es) into the synth memory from `
+                          + `slot 11 onward? ${Math.min(holding, rows.length)} slot(s) `
+                          + 'there will be overwritten. Nothing is sent to the synth.')) {
+    return;
+  }
+  library.working.place(rows.map((i) => library.source.bank.get(i)), 0);
+  updateLibraryButtons();
+}
+
+// -------------------------------------------------------- bulk transfers ---
+
+/**
+ * The dialog both directions share.
+ *
+ * `lines` is a mix of strings and elements so a caller can put the button
+ * sequence in as marked-up keys rather than as a sentence describing them: the
+ * whole message of this box is "go and press these three things", and it should
+ * be readable from across the room at a keyboard stand.
+ */
+function openTransfer({ title, lines, goLabel = null, onGo = null, onCancel = null }) {
+  $('transfer-title').textContent = title;
+  const body = $('transfer-body');
+  body.replaceChildren();
+  for (const line of lines) {
+    if (typeof line === 'string') {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = line;
+      body.append(paragraph);
+    } else {
+      body.append(line);
+    }
+  }
+  $('transfer-meter').hidden = true;
+  $('transfer-progress').value = 0;
+  $('transfer-note').textContent = '';
+
+  const go = $('transfer-go');
+  go.hidden = !goLabel;
+  go.textContent = goLabel || '';
+  go.disabled = false;
+  transferHandlers.go = onGo;
+  transferHandlers.cancel = onCancel;
+
+  const dialog = $('transfer');
+  if (!dialog.open) dialog.showModal();
+}
+
+const transferHandlers = { go: null, cancel: null };
+
+function closeTransfer() {
+  transferHandlers.go = null;
+  transferHandlers.cancel = null;
+  const dialog = $('transfer');
+  if (dialog.open) dialog.close();
+}
+
+function transferProgress(progress) {
+  $('transfer-meter').hidden = false;
+  $('transfer-progress').max = progress.expected;
+  $('transfer-progress').value = progress.messages;
+  $('transfer-note').textContent = progress.note;
+}
+
+/** The synth's own button legends, set as keys so they read as buttons. */
+function keySequence(...labels) {
+  const row = document.createElement('p');
+  row.className = 'key-seq';
+  labels.forEach((label, index) => {
+    if (index) row.append(document.createTextNode(' + '));
+    const key = document.createElement('kbd');
+    key.textContent = label;
+    row.append(key);
+  });
+  return row;
+}
+
+function warnLine(text) {
+  const paragraph = document.createElement('p');
+  paragraph.className = 'transfer-warn';
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function receiveDump() {
+  if (library.receiver && library.receiver.active) return;
+  if (!ports.synthInput) {
+    banner('error', 'A dump arrives on the synth’s own MIDI out, so choose that port '
+                    + 'under "From Synth" in the top bar first.', { sticky: true });
+    return;
+  }
+  // Nothing of ours goes out while the synth is in DATA TRANSFER; see
+  // Router.holdTransmission.
+  router.holdTransmission(true);
+
+  library.receiver = new BulkReceiver({
+    onProgress: (progress) => {
+      transferProgress(progress);
+      setLcdMessage(progress.messages
+        ? `RECV ${String(progress.messages).padStart(2, '0')} OF 16`
+        : 'PRESS BULK DUMP');
+    },
+    onDone: (bank) => {
+      library.receiver = null;
+      router.holdTransmission(false);
+      closeTransfer();
+      library.working.setBank(bank, 'received from the synth');
+      updateLibraryButtons();
+      setLcdMessage(`GOT ${bank.count()} PATCHES`, { holdMs: 4000 });
+      banner('ok', `Received ${bank.count()} patches from the synth.`);
+      logLibrary(`dump     received ${bank.count()} patch(es) from the synth`);
+      refresh();
+    },
+    onFail: (reason) => {
+      library.receiver = null;
+      router.holdTransmission(false);
+      closeTransfer();
+      setLcdMessage(null);
+      const cancelled = reason === 'cancelled';
+      banner(cancelled ? 'warn' : 'error',
+             cancelled ? 'Receive cancelled.' : `The dump did not arrive: ${reason}`,
+             { sticky: !cancelled });
+      logLibrary(`dump     ${cancelled ? 'cancelled' : `failed — ${reason}`}`);
+    },
+  });
+
+  openTransfer({
+    title: 'Receive all 64 patches from the synth',
+    lines: [
+      'On the synth, press:',
+      keySequence('DATA TRANSFER', 'WRITE', '1 BULK DUMP'),
+      'The transfer starts as soon as you do, and takes five to ten seconds. '
+      + 'Everything in the left-hand pane is replaced by what arrives.',
+    ],
+    onCancel: () => {
+      if (library.receiver) library.receiver.cancel();
+      else closeTransfer();
+    },
+  });
+  setLcdMessage('PRESS BULK DUMP');
+  library.receiver.start();
+  logLibrary('dump     listening for a bulk dump from the synth');
+}
+
+function sendBankToSynth() {
+  if (library.sender && library.sender.active) return;
+  if (!ports.output) {
+    banner('error', 'No synth chosen, so there is nowhere to send the bank. Pick the '
+                    + 'synth’s MIDI in under "To Synth".', { sticky: true });
+    return;
+  }
+  const bank = library.working.bank;
+  const empty = bank.tones.filter((tone) => tone.isEmpty).length;
+  const seconds = BulkSender.estimateSeconds(library.gapMs).toFixed(0);
+
+  const lines = [
+    'This replaces every one of the synth’s 64 patches. On the synth, set the '
+    + 'rear-panel Memory Protect switch to OFF, then press:',
+    keySequence('DATA TRANSFER', 'WRITE', '2 BULK LOAD'),
+    `The synth then waits. Press Continue and the transfer runs for about ${seconds} `
+    + 'seconds. Leave the synth in BULK LOAD until it finishes.',
+  ];
+  if (empty) {
+    lines.push(warnLine(
+      `${empty} of 64 slots are empty and will land in the synth as silence. A bulk `
+      + 'load commits the whole set at once, so they cannot be left out.'));
+  }
+
+  openTransfer({
+    title: 'Write all 64 patches to the synth',
+    lines,
+    goLabel: 'Continue',
+    onGo: () => startBankSend(bank),
+    onCancel: () => {
+      if (library.sender) library.sender.cancel();   // reports, and releases the hold
+      else closeTransfer();
+    },
+  });
+}
+
+function startBankSend(bank) {
+  // Hidden rather than greyed: there is nothing left to continue to, and a dead
+  // button beside a moving progress bar reads as a stuck one.
+  $('transfer-go').hidden = true;
+  router.holdTransmission(true);
+
+  library.sender = new BulkSender({
+    gapMs: library.gapMs,
+    send: (bytes) => { blink('out'); ports.send(bytes); },
+    onProgress: (progress) => {
+      transferProgress(progress);
+      setLcdMessage(`SEND ${String(progress.messages).padStart(2, '0')} OF 16`);
+    },
+    onDone: () => {
+      library.sender = null;
+      router.holdTransmission(false);
+      closeTransfer();
+      setLcdMessage('SENT 64 PATCHES', { holdMs: 4000 });
+      banner('ok', 'Sent all 64 patches. The synth stays in BULK LOAD until you take it '
+                   + 'out of it — press any patch button to hear them.');
+      logLibrary('load     wrote all 64 patches to the synth');
+    },
+    onFail: (reason) => {
+      library.sender = null;
+      router.holdTransmission(false);
+      closeTransfer();
+      setLcdMessage(null);
+      banner('warn', `Bulk load stopped: ${reason}`, { sticky: true });
+      logLibrary(`load     stopped — ${reason}`);
+    },
+  });
+  library.sender.start(bank, state.cfg.synthChannel);
+  logLibrary(`load     sending 64 patches at ${library.gapMs} ms between messages`);
+}
+
 // ----------------------------------------------------------------- about ---
 
 /**
@@ -1641,7 +2343,7 @@ function announcePerforming() {
 
 if (tabChannel) {
   tabChannel.onmessage = ({ data }) => {
-    if (!data || data.id === TAB_ID || state.mode !== 'perform') return;
+    if (!data || data.id === TAB_ID || !performing()) return;
     if (data.type === 'performing') {
       warnOtherTab();
       // Answer, so the tab that just started knows about this one as well.
@@ -1654,27 +2356,41 @@ if (tabChannel) {
 
 // ----------------------------------------------------------------- modes ---
 
+/**
+ * Switch modes.
+ *
+ * The interesting boundary is not between the four buttons but between Configure
+ * and the other three: crossing it starts or stops the translation, and only that
+ * crossing resets the router, prints the running banner, or tells the other tabs.
+ * Moving between Perform, Patch Manager and Live Patch changes what is drawn and
+ * nothing else -- the mapping goes on running underneath, which is the point of
+ * being able to hop over to the controls and find the patch you just auditioned
+ * already on them.
+ */
 function setMode(mode) {
   if (mode === state.mode) return;
+  const wasPerforming = performing();
   state.mode = mode;
   stopLearn();
   state.selected = null;
 
-  if (mode === 'perform') {
-    if (!ports.output) {
-      banner('warn', 'No synth chosen, so nothing will reach the synth.');
+  if (performing()) {
+    if (!wasPerforming) {
+      if (!ports.output) {
+        banner('warn', 'No synth chosen, so nothing will reach the synth.');
+      }
+      if (ports.echoing && state.cfg.thru) {
+        banner('warn', 'The controller and the synth are the same port, so thru will echo '
+                       + 'messages straight back.');
+      }
+      router.reset();
+      synthStream.reset();
+      seenUnmapped.clear();
+      seenInactive.clear();
+      seenWrongChannel.clear();
+      logLine('', 'layer');
+      logStartup();
     }
-    if (ports.echoing && state.cfg.thru) {
-      banner('warn', 'The controller and the synth are the same port, so thru will echo '
-                     + 'messages straight back.');
-    }
-    router.reset();
-    synthStream.reset();
-    seenUnmapped.clear();
-    seenInactive.clear();
-    seenWrongChannel.clear();
-    logLine('', 'layer');
-    logStartup();
     announcePerforming();
   } else {
     router.stop();
@@ -1688,54 +2404,72 @@ function setMode(mode) {
 
 /** Which mode button is lit and which side panel is up. */
 function showMode(mode) {
-  $('mode-config').classList.toggle('is-active', mode === 'config');
-  $('mode-perform').classList.toggle('is-active', mode === 'perform');
+  for (const name of MODES) $(`mode-${name}`).classList.toggle('is-active', mode === name);
   $('panel-config').hidden = mode !== 'config';
-  $('panel-perform').hidden = mode !== 'perform';
+  // Everything that is not Configure gets the Activity panel: a transfer, an
+  // audition and a knob sweep all report there, and all three can happen in any
+  // of those three modes.
+  $('panel-perform').hidden = mode === 'config';
 }
 
 /**
  * Put the side panel away, or bring it back.
  *
- * Only Perform can do without it. In Configure it is the editor -- the
+ * Only the running modes can do without it. In Configure it is the editor -- the
  * inspector, the grid size, the layers, the MIDI settings -- so hiding it would
- * leave a screen with nothing to press.
+ * leave a screen with nothing to press, and the checkbox says so by going dead
+ * rather than by disappearing.
  */
 function showSide() {
-  const hidden = state.mode === 'perform' && state.sideHidden;
+  const hidden = performing() && state.sideHidden;
   $('main').classList.toggle('no-side', hidden);
   $('side').hidden = hidden;
 
-  const button = $('side-toggle');
-  button.hidden = state.mode !== 'perform';
-  button.textContent = hidden ? 'Show status' : 'Hide status';
-  button.setAttribute('aria-expanded', String(!hidden));
+  const box = $('side-toggle');
+  box.checked = !hidden;
+  box.disabled = !performing();
 }
 
 function refresh() {
+  const managing = state.mode === 'manager';
   const panelView = showingPanel();
   showSide();
-  $('view-switch').hidden = state.mode !== 'perform';
+  showLibrary();
+
+  $('stage-body').hidden = managing;
+  $('manager').hidden = !managing;
+  $('header-lcd').hidden = !managing;
+  $('live-pane').hidden = state.mode !== 'live';
+  // The view switch belongs to whichever mode is drawing controls and letting
+  // them be played -- Configure draws the grid but only as a plan of it.
+  $('view-switch').hidden = state.mode !== 'perform' && state.mode !== 'live';
   $('view-grid').classList.toggle('is-active', !panelView);
   $('view-pg300').classList.toggle('is-active', panelView);
   $('pg300-host').hidden = !panelView;
   // The panel draws a display of its own, so the grid's would be a second one.
   $('lcd-host').hidden = panelView;
 
-  if (panelView) {
+  if (managing) {
+    // The grid and the panel are off screen; drawing either would be work
+    // nobody can see, and refreshKnobs alone is 36 elements a redraw.
+    refreshLcd();
+  } else if (panelView) {
     // buildGrid owns these two normally, and it is not running.
     $('grid').hidden = true;
     $('grid-empty').hidden = true;
     refreshPanel();
+    refreshLcd();
   } else {
     buildGrid();
     refreshKnobs();
     refreshLcd();
   }
-  renderLayerBar();
-  renderStageNote();
-  renderPresets();
-  renderInspector();
+  if (!managing) {
+    renderLayerBar();
+    renderStageNote();
+    renderPresets();
+    renderInspector();
+  }
   if (state.mode === 'config') renderForm();
   else renderSummary();
   updateStatus();
@@ -1786,12 +2520,13 @@ function wire() {
     chooseSynthInput(ports.inputs().find((port) => port.id === event.target.value) || null);
   });
 
-  $('mode-config').addEventListener('click', () => setMode('config'));
-  $('mode-perform').addEventListener('click', () => setMode('perform'));
+  for (const name of MODES) {
+    $(`mode-${name}`).addEventListener('click', () => setMode(name));
+  }
   $('view-grid').addEventListener('click', () => setView('grid'));
   $('view-pg300').addEventListener('click', () => setView('pg300'));
-  $('side-toggle').addEventListener('click', () => {
-    state.sideHidden = !state.sideHidden;
+  $('side-toggle').addEventListener('change', () => {
+    state.sideHidden = !$('side-toggle').checked;
     save();
     // The stage changes width, and the knob grid is laid out in columns that
     // grow with it, so the whole stage is drawn again rather than just uncovered.
@@ -1805,6 +2540,31 @@ function wire() {
     importText(await file.text(), file.name);
     event.target.value = '';       // so the same file can be picked again
   });
+  $('syx-input').addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (file) await loadSyx(file);
+    event.target.value = '';       // so the same file can be picked again
+  });
+
+  // ---- transfers
+  $('transfer-go').addEventListener('click', () => {
+    const go = transferHandlers.go;
+    if (go) go();
+  });
+  $('transfer-cancel').addEventListener('click', () => {
+    const cancel = transferHandlers.cancel;
+    // The handler is what closes the dialog, by way of the transfer failing;
+    // closing here as well would leave a receiver still listening behind it.
+    if (cancel) cancel();
+    else closeTransfer();
+  });
+  // Escape closes a <dialog> by itself, which would abandon a running transfer
+  // rather than cancelling it. Treat it as the Cancel button.
+  $('transfer').addEventListener('cancel', (event) => {
+    event.preventDefault();
+    $('transfer-cancel').click();
+  });
+
   $('do-export').addEventListener('click', exportConfig);
   $('do-reset').addEventListener('click', () => {
     if (!confirm('Throw away the current configuration and start again?')) return;
@@ -1950,7 +2710,7 @@ function wire() {
   // Number keys jump between layers while performing, so a layer change does not
   // need the mouse when the controller has no spare knob for it.
   document.addEventListener('keydown', (event) => {
-    if (state.mode !== 'perform') return;
+    if (!performing()) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     // The target is whatever has focus, which is the document itself when
     // nothing does -- and that has no matches().

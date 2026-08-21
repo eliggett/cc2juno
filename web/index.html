@@ -49,23 +49,46 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
   <div class="modes" role="tablist" aria-label="Mode">
     <button id="mode-config" role="tab">Configure</button>
     <button id="mode-perform" role="tab" class="is-active">Perform</button>
-    <!-- Not wired up yet: it stands here to say that patch storage is coming. -->
-    <button id="mode-library" role="tab" disabled
-            title="Patch library -- not yet built">Library</button>
+    <!-- The two halves of the librarian. Patch Manager is the whole screen given
+         over to the two banks; Live Patch keeps the performance controls and puts
+         a patch list beside them, for playing a file rather than filing it. -->
+    <button id="mode-manager" role="tab"
+            title="Organise banks, and transfer them to and from the synth">Patch Manager</button>
+    <button id="mode-live" role="tab"
+            title="Play patches straight from a file, without writing the synth's memory">Live Patch</button>
   </div>
 
   <div class="files">
+    <label class="files-check" title="The Activity panel down the right-hand side.
+Configure keeps it whatever this says: that panel is where the editing is done,
+so there would be nothing left to press without it.">
+      <input type="checkbox" id="side-toggle" aria-controls="side" checked>
+      Status
+    </label>
     <button id="do-import">Import</button>
     <button id="do-export">Export</button>
     <button id="do-reset" class="quiet">Reset</button>
     <input type="file" id="file-input" accept=".yaml,.yml,text/yaml" hidden>
+    <!-- Both spellings of each, because a file picker matches the extension
+         literally and dumps come off old software in upper case. What is
+         actually in the file is decided by reading it, not by its name. -->
+    <input type="file" id="syx-input" hidden
+           accept=".syx,.SYX,.mid,.MID,.midi,.MIDI,.rmi,.RMI,audio/midi,application/octet-stream">
   </div>
 </header>
+
+<!-- Patch Manager has no knob grid and no PG-300, so it has nowhere to put a
+     display -- and a bulk transfer is exactly when one earns its keep. This is
+     the same Lcd class the grid uses, built by refreshLcd() in js/app.js. -->
+<div id="header-lcd" class="header-lcd" hidden></div>
 
 <div id="banners" class="banners" aria-live="polite"></div>
 
 <main id="main">
   <section class="stage">
+   <!-- Everything Configure, Perform and Live Patch draw. Patch Manager hides the
+        lot and puts #manager in its place. -->
+   <div id="stage-body" class="stage-body">
     <div class="stage-head">
       <div id="layer-bar" class="layer-bar"></div>
       <!-- Perform only: the same running mapping, seen from the controller's
@@ -74,9 +97,6 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
         <button id="view-grid" role="tab">Knob grid</button>
         <button id="view-pg300" role="tab" class="is-active">PG-300</button>
       </div>
-      <!-- Perform only: Configure needs the side panel, since that is where the
-           editing is done. -->
-      <button id="side-toggle" class="quiet small" aria-controls="side">Hide status</button>
       <div id="stage-note" class="stage-note"></div>
     </div>
     <!-- The synth's display, built by js/lcd.js. The PG-300 view has one of its
@@ -120,6 +140,17 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
       </div>
       <p id="preset-note" class="preset-note"></p>
     </div>
+   </div>
+
+    <!-- Patch Manager: the two banks, side by side, with the copy and move
+         buttons between them. Built by js/app.js out of PatchPane. -->
+    <div id="manager" class="manager" hidden></div>
+
+    <!-- Live Patch: the same patch list as the manager's right-hand pane, put
+         beside the performance controls. It is literally the same element,
+         moved -- see showLibrary() in js/app.js -- so a file opened in one mode
+         is already open in the other, selection and all. -->
+    <aside id="live-pane" class="live-pane" hidden></aside>
   </section>
 
   <aside id="side" class="side">
@@ -299,6 +330,23 @@ change on it, and cc2juno moves the knobs to match. Optional.">From Synth:
 
   </aside>
 </main>
+
+<!-- Both halves of a bulk transfer, which are the same shape: tell the player
+     which buttons to press on the synth, then show a bar while it happens. The
+     text and the buttons are set by js/app.js, since the two directions differ
+     in what they say and in what "Cancel" costs. -->
+<dialog id="transfer" class="transfer">
+  <h2 id="transfer-title"></h2>
+  <div id="transfer-body" class="transfer-body"></div>
+  <div id="transfer-meter" class="transfer-meter" hidden>
+    <progress id="transfer-progress" max="16" value="0"></progress>
+    <span id="transfer-note" class="transfer-note"></span>
+  </div>
+  <div class="transfer-actions">
+    <button id="transfer-go" class="primary"></button>
+    <button id="transfer-cancel" class="quiet">Cancel</button>
+  </div>
+</dialog>
 
 <!-- The words in here live in about.html, which is loaded the first time the
      About button is pressed. Edit that file, not this one. -->

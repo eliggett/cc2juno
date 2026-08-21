@@ -23,7 +23,14 @@ controller as a grid of knobs (and you define the grid) and lets you click one t
 function, which is a good deal friendlier than editing YAML by hand — and it
 imports and exports exactly the file the other builds read. It can also listen to
 the synth: connect the Alpha Juno's MIDI out as well and every knob and slider on
-screen follows the patches you choose on the synth itself. See
+screen follows the patches you choose on the synth itself.
+
+The browser build also manages patches, which the Python builds do not. **Patch
+Manager** opens bank files — `.syx`, or a `.mid` with the dump saved inside it —
+and the synth's own memory side by side: audition, rename, reorder and drag
+patches into a set, receive a bulk dump and write one back. **Live Patch** puts that patch list next to the performance
+controls, so clicking a sound loads it into the edit buffer and moves every
+control to match, without touching the instrument's memory at all. See
 [web/README.md](web/README.md). A development HTTPS server is included, since Web
 MIDI needs a secure context. Or, you can launch the latest version directly from [here](https://eliggett.github.io/cc2juno/). 
 

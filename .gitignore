@@ -10,3 +10,6 @@ __pycache__/
 
 # Certs:
 *.pem
+
+.claude/
+.claude.json
