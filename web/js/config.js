@@ -117,7 +117,7 @@ export function makeConfig(overrides = {}) {
     groupByte: aj.DEFAULT_GROUP,
     maxMsgsPerSec: 100,
     hysteresis: 2,
-    thru: false,                  // forward untranslated traffic to the output
+    thru: true,                   // forward untranslated traffic to the output
     portInput: null,              // null = nothing remembered
     portOutput: null,
     layerCc: null,                // null = no layering, one fixed layer
@@ -214,7 +214,7 @@ export function parse(raw, source = 'config') {
   cfg.groupByte = requireInt(midi.group_byte ?? aj.DEFAULT_GROUP, 'midi.group_byte', 0, 127);
   cfg.maxMsgsPerSec = requireInt(midi.max_msgs_per_sec ?? 100, 'midi.max_msgs_per_sec', 1, 1000);
   cfg.hysteresis = requireInt(midi.hysteresis ?? 2, 'midi.hysteresis', 0, 16);
-  cfg.thru = requireBool(midi.thru ?? false, 'midi.thru');
+  cfg.thru = requireBool(midi.thru ?? true, 'midi.thru');
 
   const ports = raw.ports || {};
   if (typeof ports !== 'object' || Array.isArray(ports)) {
