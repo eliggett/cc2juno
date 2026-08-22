@@ -329,12 +329,28 @@ export function fromNibbles(nibbles) {
 
 // ------------------------------------------------------ message splitting ---
 
+// Real-time messages are allowed to interleave into the middle of a system
+// exclusive message, so they are stepped over rather than ending one.
+const REALTIME_FIRST = 0xF8;
+
 /**
  * Every complete F0..F7 message in a blob, ignoring whatever lies between them.
  *
- * Files in the wild carry stray bytes between messages -- a saved MIDI stream,
- * a program that padded its output -- and skipping them is what lets those banks
- * load at all.
+ * Files in the wild carry stray bytes between messages -- a saved MIDI stream, a
+ * program that padded its output, an FTP client that turned an 0A into 0D 0A --
+ * and skipping them is what lets those banks load at all.
+ *
+ * The subtle part is where a message *ends*. Scanning ahead for the next F7 is
+ * wrong, and wrong in a way that only shows up once files are joined together: a
+ * dump ending in a dangling F0 -- EZBANK1.SYX out of the MKS-50 collection is one
+ * -- is harmless on its own, because the F0 simply runs off the end of the file.
+ * Concatenate it with another bank and that scan runs on into the next file and
+ * swallows its first message whole, costing four patches with nothing to show for
+ * it but a bank that is mysteriously four short.
+ *
+ * So a message ends at F7 or not at all: between F0 and F7 a sysex carries data
+ * bytes only, and any other status byte means this one was cut short. That is the
+ * same rule SysexStream in tone_in.js applies to the wire, for the same reason.
  */
 export function splitMessages(data) {
   const messages = [];
@@ -342,9 +358,25 @@ export function splitMessages(data) {
   while (index < data.length) {
     const start = data.indexOf(SYSEX_START, index);
     if (start === -1) break;
-    const end = data.indexOf(SYSEX_END, start);
-    if (end === -1) break;
-    messages.push(data.slice(start, end + 1));
+
+    let end = -1;
+    let realtime = 0;
+    for (let at = start + 1; at < data.length; at += 1) {
+      const byte = data[at];
+      if (byte === SYSEX_END) { end = at; break; }
+      if (byte >= REALTIME_FIRST) { realtime += 1; continue; }
+      if (byte >= 0x80) break;              // a status byte: this message is cut short
+    }
+    if (end === -1) {
+      // Abandon it and look again from just past the F0, so that a message
+      // starting a byte later -- the next file along -- is still found.
+      index = start + 1;
+      continue;
+    }
+
+    const message = data.slice(start, end + 1);
+    // F0 and F7 are both below the real-time range, so they survive this.
+    messages.push(realtime ? message.filter((byte) => byte < REALTIME_FIRST) : message);
     index = end + 1;
   }
   return messages;
@@ -417,6 +449,10 @@ export class Bank {
       ? tones
       : Array.from({ length: TONE_COUNT }, () => new Tone());
     this.channel = 1;
+    // Where this bank came from, for a pane showing several at once: several
+    // files can be open together and each bank belongs to one of them, so the
+    // label has to travel with the bank rather than with the pane.
+    this.source = '';
     // Which slots a file or a dump actually supplied. A .syx holding sixteen
     // patches should list sixteen rows, not sixteen followed by 48 blanks, and
     // only the source that filled them knows the difference.
@@ -449,6 +485,7 @@ export class Bank {
   copy() {
     const bank = new Bank(this.tones.map((tone) => tone.copy()));
     bank.channel = this.channel;
+    bank.source = this.source;
     bank.filled = new Set(this.filled);
     bank.extraBlocks = this.extraBlocks.map((block) => block.slice());
     return bank;
@@ -496,31 +533,16 @@ export class Bank {
     this.filled.add(second);
   }
 
-  /** Build a bank from the raw contents of a .syx file or a captured dump. */
+  /**
+   * Build a bank from the raw contents of a .syx file or a captured dump.
+   *
+   * The first bank, if the file holds more than one -- see banksFromSysex, which
+   * is what anything showing a file to a user should be calling.
+   */
   static fromSysex(data) {
-    const bank = new Bank();
-    let channel = null;
-    let seen = 0;
-    for (const message of splitMessages(data)) {
-      const parsed = parseBulk(message);
-      if (!parsed) continue;
-      if (channel === null) channel = parsed.channel;
-      if (parsed.level !== LEVEL_TONE) {
-        bank.extraBlocks.push(message);
-        continue;
-      }
-      parsed.tones.forEach((tone, offset) => {
-        const index = parsed.firstTone + offset;
-        if (index >= 0 && index < TONE_COUNT) {
-          bank.tones[index] = tone;
-          bank.filled.add(index);
-          seen += 1;
-        }
-      });
-    }
-    if (!seen) throw new BulkError('no Alpha Juno tone bulk data in this file');
-    bank.channel = channel || 1;
-    return bank;
+    const banks = banksFromSysex(data);
+    if (!banks.length) throw new BulkError('no Alpha Juno tone bulk data in this file');
+    return banks[0];
   }
 
   /** The sixteen BLD messages the synth sends, as separate messages. */
@@ -548,4 +570,81 @@ export class Bank {
     }
     return out;
   }
+}
+
+// ---------------------------------------------------- more than one bank ---
+
+/**
+ * Every bank in a file, in the order they appear. Empty if there are none.
+ *
+ * A synth has 64 memories and a Bank has 64 slots, but a *file* is under no such
+ * obligation, and plenty in circulation hold several banks. Reading one of those
+ * into a single Bank loses patches without saying so, which is the worst way to
+ * lose them: the later banks overwrite the earlier ones slot for slot, so the
+ * result is a full, healthy-looking 64 patches that are simply not the ones the
+ * file was named after.
+ *
+ * Two shapes turn up, and they are told apart differently:
+ *
+ *   Concatenated   Each bank addresses slots 0-63, because each was dumped
+ *                  separately and the files were joined end to end. There is no
+ *                  marker between them; what gives it away is a message landing
+ *                  on a slot this bank has already been given, which within one
+ *                  dump never happens.
+ *   Numbered       The messages address slots 64 and up, so the bank number is
+ *                  in the address: slot 70 is bank 2, slot 6.
+ *
+ * A message repeated inside one genuine dump -- a librarian writing a correction
+ * over its own output -- would be read as the start of a new bank. That is rare,
+ * and erring that way shows the patches instead of hiding them.
+ */
+export function banksFromSysex(data) {
+  const banks = [];
+  const used = [];
+  const extraBlocks = [];
+  let channel = null;
+  let current = 0;
+
+  const ensure = (index) => {
+    while (banks.length <= index) { banks.push(new Bank()); used.push(new Set()); }
+  };
+
+  for (const message of splitMessages(data)) {
+    const parsed = parseBulk(message);
+    if (!parsed) continue;
+    if (channel === null) channel = parsed.channel;
+    if (parsed.level !== LEVEL_TONE) { extraBlocks.push(message); continue; }
+
+    const numbered = Math.floor(parsed.firstTone / TONE_COUNT);
+    const base = parsed.firstTone % TONE_COUNT;
+    let target;
+    if (numbered > 0) {
+      target = numbered;
+      ensure(target);
+    } else {
+      ensure(current);
+      if (used[current].has(base)) { current += 1; ensure(current); }
+      target = current;
+    }
+
+    parsed.tones.forEach((tone, offset) => {
+      const index = base + offset;
+      // A message near the end of a bank whose four tones would run past slot 88.
+      // The overflow belongs to no address the synth has, so it is dropped rather
+      // than wrapped into the next bank.
+      if (index < 0 || index >= TONE_COUNT) return;
+      banks[target].tones[index] = tone;
+      banks[target].filled.add(index);
+      used[target].add(index);
+    });
+  }
+
+  // A numbered file may leave gaps -- bank 3 present, bank 2 absent -- and a
+  // blank bank in the middle of a browser is a puzzle rather than information.
+  const filled = banks.filter((bank) => bank.filled.size);
+  for (const bank of filled) bank.channel = channel || 1;
+  // The MKS-50 patch and chord blocks belong to the file rather than to any one
+  // bank of tones, so they ride with the first and are written back with it.
+  if (filled.length) filled[0].extraBlocks = extraBlocks;
+  return filled;
 }

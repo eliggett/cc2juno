@@ -912,15 +912,46 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   border-bottom: 1px solid var(--line);
 }
 
-/* The two banks, side by side, with the copy and move buttons between them. */
+/* The two banks, side by side, with the copy and move buttons between them.
+ *
+ * A grid rather than a flex row, so the two panes can share their rows: heading,
+ * filename, bank arrows and list each line up across both, whatever is or is not
+ * in them. That matters more than it sounds. The panes sit next to each other so
+ * a patch on the right can be read level with the slot it would land in on the
+ * left, and two things quietly broke that -- the memory pane's five buttons
+ * wrapping its heading onto a second line, and one pane having bank arrows while
+ * the other has none.
+ *
+ * Every child is given its row by name rather than left to auto-placement, so a
+ * pane with no bank arrows still puts its list in the list row instead of sliding
+ * it up into the empty one. The bank row then costs nothing when neither pane is
+ * using it, because a grid row with nothing in it has no height.
+ *
+ * Without subgrid this degrades to two independent grids: the panes still look
+ * right and simply stop agreeing about where their rows are, which is where they
+ * were before. */
 .manager {
   flex: 1;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   align-items: stretch;
   gap: 14px;
 }
-.manager > .patch-pane { flex: 1; min-width: 0; }
+.manager > .patch-pane {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: 1 / -1;
+  /* The rows are the grid's; a gap here would be a second one between them. */
+  row-gap: 0;
+}
+.manager > .patch-pane > .patch-pane-head   { grid-row: 1; }
+.manager > .patch-pane > .patch-pane-source { grid-row: 2; }
+.manager > .patch-pane > .patch-banks       { grid-row: 3; }
+.manager > .patch-pane > .patch-list        { grid-row: 4; }
+.manager > .patch-pane > .patch-empty       { grid-row: 4; }
 
 .manager-middle {
   display: flex;
@@ -929,7 +960,9 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   gap: 8px;
   /* Wide enough for the widest legend, so the column does not change width as
    * the buttons enable and disable. */
-  flex: 0 0 92px;
+  width: 92px;
+  grid-column: 2;
+  grid-row: 1 / -1;
 }
 
 /* Live Patch: the same pane, beside the controls rather than beside a bank.
@@ -1003,6 +1036,22 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Only on screen for a file holding more than one bank. */
+.patch-banks {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.patch-banks.is-single { display: none; }
+.patch-banks button { line-height: 1; padding: 3px 9px; }
+.patch-banks-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .patch-list {
@@ -1190,8 +1239,11 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
    * to nothing is worse than a list you have to scroll to. Stacking also puts the
    * copy buttons between the two, which is where they point. */
   .stage { flex-direction: column; }
-  .manager { flex-direction: column; }
-  .manager-middle { flex-direction: row; justify-content: flex-start; flex-basis: auto; }
+  /* Stacked, the panes are no longer beside each other, so there is nothing to
+     line up and the shared grid goes back to being a plain column. */
+  .manager { display: flex; flex-direction: column; }
+  .manager > .patch-pane { display: flex; }
+  .manager-middle { flex-direction: row; justify-content: flex-start; width: auto; }
   .patch-list { max-height: 46vh; }
   .live-pane { position: static; flex-basis: auto; max-height: none; width: 100%; }
 }

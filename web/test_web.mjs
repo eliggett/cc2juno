@@ -1600,6 +1600,168 @@ check('a MIDI file inside a RIFF wrapper is unwrapped first', () => {
   equal(smf.sysexFromSmf(riff).messages.length, 1);
 });
 
+// ------------------------------------------------- files of several banks ---
+//
+// A synth has 64 memories, but a file is under no such obligation, and plenty in
+// circulation hold more. Reading one of those into a single bank used to lose the
+// earlier ones without a word: the later banks overwrite the earlier slot for
+// slot, so the result was a healthy-looking 64 patches that were not the ones the
+// file was named after.
+
+/** A bank whose every slot is named after `tag`, so banks can be told apart. */
+function labelledBank(tag) {
+  const set = new bank.Bank();
+  for (let i = 0; i < bank.TONE_COUNT; i += 1) {
+    set.set(i, new bank.Tone(`${tag}-${i}`, GROWLYBASS));
+  }
+  return set;
+}
+
+const joined = (...parts) => {
+  const total = parts.reduce((sum, p) => sum + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+};
+
+check('one bank in a file is one bank', () => {
+  const banks = bank.banksFromSysex(GOLDEN_BLD);
+  equal(banks.length, 1);
+  equal(banks[0].count(), 4, 'a four-tone file is still one bank');
+  equal(banks[0].get(0).displayName, 'GrowlyBass');
+});
+
+check('banks joined end to end are read as separate banks', () => {
+  // The common shape: two dumps concatenated, each addressing slots 11-88, with
+  // nothing between them to say where one ends.
+  const one = labelledBank('A');
+  const two = labelledBank('B');
+  const three = labelledBank('C');
+  const banks = bank.banksFromSysex(joined(one.toSysex(1), two.toSysex(1), three.toSysex(1)));
+  equal(banks.length, 3, 'three dumps should read as three banks');
+  equal(banks.map((b) => b.get(0).displayName), ['A-0', 'B-0', 'C-0']);
+  equal(banks.map((b) => b.count()), [64, 64, 64]);
+});
+
+check('a bank numbered past slot 88 goes to the bank its address names', () => {
+  // The other shape: the messages address slots 64 and up, so the bank number is
+  // in the address itself.
+  const one = labelledBank('A');
+  const two = labelledBank('B');
+  const parts = [one.toSysex(1)];
+  for (let i = 0; i < bank.BULK_MESSAGE_COUNT; i += 1) {
+    const first = i * bank.TONES_PER_MESSAGE;
+    parts.push(bank.buildBulk(two.tones.slice(first, first + bank.TONES_PER_MESSAGE),
+                              bank.TONE_COUNT + first, 1));
+  }
+  const banks = bank.banksFromSysex(joined(...parts));
+  equal(banks.length, 2);
+  equal(banks.map((b) => b.get(0).displayName), ['A-0', 'B-0']);
+  equal(banks[1].get(63).displayName, 'B-63', 'the last slot of the second bank');
+});
+
+check('a part-filled file is still one bank, not several', () => {
+  // The false positive that would matter: sixteen patches must not read as four
+  // banks of four just because the file is short.
+  const one = labelledBank('A');
+  const parts = [];
+  for (let i = 0; i < 4; i += 1) {
+    const first = i * bank.TONES_PER_MESSAGE;
+    parts.push(bank.buildBulk(one.tones.slice(first, first + bank.TONES_PER_MESSAGE),
+                              first, 1));
+  }
+  const banks = bank.banksFromSysex(joined(...parts));
+  equal(banks.length, 1);
+  equal(banks[0].count(), 16);
+});
+
+check('nothing is lost between the banks of a multi-bank file', () => {
+  const parts = ['A', 'B', 'C', 'D'].map((tag) => labelledBank(tag));
+  const banks = bank.banksFromSysex(joined(...parts.map((b) => b.toSysex(1))));
+  equal(banks.length, 4);
+  for (const [index, want] of parts.entries()) {
+    equal(banks[index].tones.map((t) => t.name), want.tones.map((t) => t.name),
+          `bank ${index + 1} does not match what went in`);
+    equal(banks[index].tones.map((t) => t.params), want.tones.map((t) => t.params));
+  }
+});
+
+check('Bank.fromSysex still hands back the first bank, and still refuses rubbish', () => {
+  const two = joined(labelledBank('A').toSysex(1), labelledBank('B').toSysex(1));
+  equal(bank.Bank.fromSysex(two).get(0).displayName, 'A-0');
+  equal(bank.banksFromSysex(Uint8Array.from([0xF0, 0x43, 0x00, 0xF7])).length, 0);
+  throwsWith(() => bank.Bank.fromSysex(Uint8Array.from([0xF0, 0x43, 0x00, 0xF7])),
+             'no Alpha Juno tone bulk data');
+});
+
+check('several banks arrive the same way out of a MIDI file', () => {
+  // The MIDI reader hands its messages over as one blob, so a multi-bank .mid
+  // splits by exactly the same rule with nothing extra to do.
+  const one = labelledBank('A');
+  const two = labelledBank('B');
+  const events = [];
+  for (const set of [one, two]) {
+    for (const message of set.toMessages(1)) events.push(...sysexEvent([...message]));
+  }
+  const file = smfFile([[...events, ...END_OF_TRACK]], { format: 0 });
+  const { blob, count } = smf.sysexBlobFromSmf(file);
+  equal(count, 32, 'thirty-two bulk messages should have come out');
+  const banks = bank.banksFromSysex(blob);
+  equal(banks.length, 2);
+  equal(banks.map((b) => b.get(0).displayName), ['A-0', 'B-0']);
+});
+
+check('a dangling F0 does not eat the message after it', () => {
+  // Found in EZBANK1.SYX out of the MKS-50 collection, which ends with an F0 and
+  // no F7. Harmless on its own -- it runs off the end of the file -- but joining
+  // that file to another used to let the scan run on into the next bank and
+  // swallow its first message, costing four patches with nothing to show for it.
+  const one = labelledBank('A');
+  const two = labelledBank('B');
+  const dangling = Uint8Array.from([0xF0, 0x41, 0x37]);
+  const banks = bank.banksFromSysex(joined(one.toSysex(1), dangling, two.toSysex(1)));
+  equal(banks.length, 2);
+  equal(banks.map((b) => b.count()), [64, 64], 'neither bank should have lost a message');
+  equal(banks[1].get(0).displayName, 'B-0', 'the second bank must start at its own slot 11');
+  equal(banks[1].tones.map((t) => t.name), two.tones.map((t) => t.name));
+});
+
+check('the padding files pick up between banks is stepped over', () => {
+  // 0D 0A from a text-mode transfer, and trailing F7s, both seen in real files.
+  const one = labelledBank('A');
+  const two = labelledBank('B');
+  const banks = bank.banksFromSysex(joined(
+    one.toSysex(1), Uint8Array.from([0x0D, 0x0A]),
+    two.toSysex(1), Uint8Array.from([0xF7, 0xF7, 0xF7, 0x00]),
+  ));
+  equal(banks.length, 2);
+  equal(banks.map((b) => b.count()), [64, 64]);
+});
+
+check('real-time bytes inside a message are stepped over, not kept', () => {
+  // Legal mid-sysex, and they turn up in dumps captured off a wire. Left in, they
+  // would shift every nibble after them and the patch would decode to rubbish.
+  const clean = [...GOLDEN_BLD];
+  const withClock = Uint8Array.from([
+    ...clean.slice(0, 40), 0xF8, ...clean.slice(40, 90), 0xFE, ...clean.slice(90),
+  ]);
+  const messages = bank.splitMessages(withClock);
+  equal(messages.length, 1);
+  equal([...messages[0]], clean, 'the clock bytes should have been taken back out');
+  equal(bank.Bank.fromSysex(withClock).get(0).displayName, 'GrowlyBass');
+});
+
+check('the MKS-50 blocks of a multi-bank file ride with the first bank', () => {
+  const chord = Uint8Array.from([0xF0, 0x41, 0x37, 0x00, 0x23, bank.LEVEL_CHORD,
+                                 0x01, 0x00, 0x00, 0x00, 0x00, 0xF7]);
+  const banks = bank.banksFromSysex(joined(labelledBank('A').toSysex(1), chord,
+                                           labelledBank('B').toSysex(1)));
+  equal(banks.length, 2);
+  equal(banks[0].extraBlocks.length, 1, 'the chord block should have been kept');
+  equal(banks[1].extraBlocks.length, 0);
+});
+
 // ------------------------------------------------------------------- done ---
 
 console.log(`\n${passed}/${passed + failed} passed`

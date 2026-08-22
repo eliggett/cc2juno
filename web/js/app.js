@@ -16,7 +16,7 @@ import { MoveDetector, LEARN_MOVE_THRESHOLD } from './learn.js';
 import { SysexStream, parseToneMessage } from './tone_in.js';
 import { Lcd, patchLabel } from './lcd.js';
 import { PresetBank, SLOT_COUNT, isComplete, knownCount, slotLabel } from './presets.js';
-import { Bank, parseBulk, slotLabel as bankSlotLabel } from './bank.js';
+import { Bank, banksFromSysex, parseBulk, slotLabel as bankSlotLabel } from './bank.js';
 import { BulkReceiver, BulkSender, DEFAULT_GAP_MS } from './bulk.js';
 import { PatchPane } from './library.js';
 import { isSmf, sysexBlobFromSmf } from './smf.js';
@@ -1745,8 +1745,10 @@ function buildLibrary() {
     editable: false,
     showEmpty: false,
     emptyHint: 'Open a bank file to list the patches in it — a raw .syx dump, or a '
-             + '.mid with the dump saved inside it. Click a patch to hear it on the '
-             + 'synth straight away; drag it into the synth memory to keep it in a set.',
+             + '.mid with the dump saved inside it. Choose several files at once and '
+             + 'each becomes a bank you can step through. Click a patch to hear it on '
+             + 'the synth straight away; drag it into the synth memory to keep it.',
+    emptySource: 'no file open',
     onAudition: (index, tone) => auditionTone(index, tone),
     onSelect: () => updateLibraryButtons(),
   });
@@ -1761,7 +1763,8 @@ function buildLibrary() {
     paneButton('Send all 64', 'Write every patch in this pane to the synth’s memory',
                sendBankToSynth, { managerOnly: true }),
     paneButton('Open…', 'Open a bank file straight into this pane — a raw .syx dump, '
-                        + 'or a .mid with the dump saved inside it',
+                        + 'or a .mid with the dump saved inside it. Only one bank fits '
+                        + 'in the synth, so only the first is taken',
                () => openSyx('working'), { managerOnly: true }),
     paneButton('Save .syx', 'Write this pane out as a .syx file', exportSyx,
                { managerOnly: true }),
@@ -1770,8 +1773,9 @@ function buildLibrary() {
   );
 
   library.source.actions.append(
-    paneButton('Open .syx…', 'Open a bank file to browse — a raw .syx dump, or a .mid '
-                             + 'with the dump saved inside it',
+    paneButton('Open .syx…', 'Open bank files to browse — raw .syx dumps, or .mid with '
+                             + 'the dump saved inside. Choose several and each one '
+                             + 'becomes a bank you can step through',
                () => openSyx('source')),
   );
 
@@ -1908,14 +1912,15 @@ function openSyx(target) {
 }
 
 /**
- * Open a patch file, which may be a raw dump or a MIDI file with one inside it.
+ * Read one patch file into banks, or say why it could not be.
  *
- * The two are told apart by what is in the file rather than by its name: plenty
- * of bank dumps are saved as .mid, and plenty of MIDI files are named .syx by a
- * transfer that did not know better. `isSmf` looks for the MThd header, which is
- * the only honest answer either way.
+ * A raw dump or a MIDI file with one inside it; the two are told apart by what is
+ * in the file rather than by its name, since plenty of bank dumps are saved as
+ * .mid and plenty of MIDI files are named .syx by a transfer that did not know
+ * better. `isSmf` looks for the MThd header, which is the only honest answer
+ * either way.
  */
-async function loadSyx(file) {
+async function readPatchFile(file) {
   const raw = new Uint8Array(await file.arrayBuffer());
   let bytes = raw;
   let unwrapped = null;
@@ -1925,41 +1930,117 @@ async function loadSyx(file) {
     try {
       found = sysexBlobFromSmf(raw);
     } catch (exc) {
-      banner('error', `${file.name}: this is a MIDI file, but it could not be read — `
-                      + `${exc.message}.`, { sticky: true });
-      return;
+      return { error: `${file.name}: this is a MIDI file, but it could not be read — `
+                    + `${exc.message}.` };
     }
     if (!found.count) {
-      banner('error', `${file.name}: this is a MIDI file (format ${found.format}, `
-                      + `${found.tracks} track${found.tracks === 1 ? '' : 's'}) but there `
-                      + 'is no system exclusive data anywhere in it, so there are no '
-                      + 'patches to read. A bank saved as a MIDI file carries the dump '
-                      + 'as sysex events; one holding only notes cannot.', { sticky: true });
-      return;
+      return { error: `${file.name}: this is a MIDI file (format ${found.format}, `
+                    + `${found.tracks} track${found.tracks === 1 ? '' : 's'}) but there `
+                    + 'is no system exclusive data anywhere in it, so there are no '
+                    + 'patches to read. A bank saved as a MIDI file carries the dump as '
+                    + 'sysex events; one holding only notes cannot.' };
     }
     bytes = found.blob;
-    unwrapped = found;   // blob, count, format, tracks -- and the messages themselves
+    unwrapped = found;
   }
 
-  let bank;
-  try {
-    bank = Bank.fromSysex(bytes);
-  } catch (exc) {
-    banner('error', unwrapped
-      ? `${file.name}: ${exc.message}. ${describeForeignSysex(unwrapped)}`
-      : `${file.name}: ${exc.message}. A patch file for this synth is a bulk dump — `
-        + 'the same bytes the Alpha Juno sends on DATA TRANSFER, BULK DUMP — either '
-        + 'raw (.syx) or saved inside a MIDI file (.mid).', { sticky: true });
+  // Several banks, not one. A file is under no obligation to hold 64 patches, and
+  // reading a multi-bank file into a single bank loses the earlier ones silently
+  // -- see banksFromSysex.
+  const banks = banksFromSysex(bytes);
+  if (!banks.length) {
+    return { error: `${file.name}: no Alpha Juno tone bulk data in this file. `
+                  + (unwrapped
+                    ? describeForeignSysex(unwrapped)
+                    : 'A patch file for this synth is a bulk dump — the same bytes the '
+                      + 'Alpha Juno sends on DATA TRANSFER, BULK DUMP — either raw '
+                      + '(.syx) or saved inside a MIDI file (.mid).') };
+  }
+
+  // Each bank carries the name of the file it came from, so a pane holding banks
+  // from several files can say which is which. A file that gave more than one
+  // says which of its own, since two rows both reading "collection.syx" with
+  // nothing to tell them apart is worse than no label.
+  banks.forEach((bank, index) => {
+    bank.source = banks.length > 1
+      ? `${file.name} — ${index + 1} of ${banks.length}`
+      : file.name;
+  });
+  return { banks, unwrapped };
+}
+
+/**
+ * Open one file or several, and show what came out of them as banks.
+ *
+ * Several files are read as one list of banks in the order they were chosen,
+ * which makes selecting a folder of dumps the same act as opening one file that
+ * had them all joined end to end. A file that cannot be read costs that file and
+ * not the rest: four good banks are worth more than a clean refusal, and the one
+ * that failed is named so it can be looked at.
+ */
+async function loadPatchFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+
+  const banks = [];
+  const problems = [];
+  // What was unwrapped from a MIDI file, per file. Kept rather than counted,
+  // because when a patch list looks wrong this is the line that says whether the
+  // container was read the way it was meant to be.
+  const midiNotes = [];
+
+  for (const file of files) {
+    // Deliberately one at a time rather than in parallel: these are small, and
+    // the order banks end up in is the order the files were chosen in.
+    const result = await readPatchFile(file);   // eslint-disable-line no-await-in-loop
+    if (result.error) { problems.push(result.error); continue; }
+    if (result.unwrapped) {
+      const { format, tracks, count } = result.unwrapped;
+      midiNotes.push(`${file.name}: unwrapped from a format ${format} MIDI file, `
+                     + `${tracks} track(s), ${count} sysex message(s)`);
+    }
+    banks.push(...result.banks);
+  }
+
+  if (!banks.length) {
+    banner('error', problems.join('\n\n'), { sticky: true });
     return;
   }
-  const pane = library.syxTarget === 'working' ? library.working : library.source;
-  pane.setBank(bank, file.name);
-  const count = bank.count();
-  banner('ok', `Opened ${file.name}: ${count} patch${count === 1 ? '' : 'es'}.`);
-  logLibrary(`file     ${file.name} — ${count} patch(es) read`);
-  if (unwrapped) {
-    logLibrary(`         unwrapped from a format ${unwrapped.format} MIDI file, `
-               + `${unwrapped.tracks} track(s), ${unwrapped.count} sysex message(s)`);
+  for (const problem of problems) banner('warn', problem, { sticky: true });
+
+  const intoWorking = library.syxTarget === 'working';
+  const pane = intoWorking ? library.working : library.source;
+  // The synth-memory pane is a picture of 64 addresses and cannot show more, so
+  // anything opened into it takes the first bank. The file pane browses the rest,
+  // and Copy All puts whichever one is on show into the memory.
+  const shown = intoWorking ? banks.slice(0, 1) : banks;
+  const title = files.length === 1 ? files[0].name : `${files.length} files`;
+  pane.setBanks(shown, title);
+
+  const total = banks.reduce((sum, one) => sum + one.count(), 0);
+  const many = banks.length > 1;
+  banner('ok', many
+    ? `Opened ${title}: ${total} patches in ${banks.length} banks of 64.`
+      + (intoWorking ? ' The synth holds one bank, so this is the first of them —'
+                     + ' open it on the right to reach the others.' : '')
+    : `Opened ${title}: ${total} patch${total === 1 ? '' : 'es'}.`);
+  logLibrary(`file     ${title} — ${total} patch(es)`
+             + (many ? ` in ${banks.length} banks` : '') + ' read');
+
+  // The file records the channel it was dumped on. It is not adopted, because the
+  // channel this program sends on is a setting the other builds share; but a
+  // mismatch is worth one line, since it is the usual reason a transfer does
+  // nothing at all.
+  if (banks[0].channel !== state.cfg.synthChannel) {
+    logLibrary(`         it was dumped on MIDI channel ${banks[0].channel}; cc2juno is `
+               + `set to channel ${state.cfg.synthChannel}`);
+  }
+  if (banks[0].extraBlocks.length) {
+    logLibrary(`         ${banks[0].extraBlocks.length} MKS-50 patch/chord block(s) kept `
+               + 'and written back unchanged');
+  }
+  if (midiNotes.length) {
+    for (const note of midiNotes) logLibrary(`         ${note}`);
     // Said once. Reading patches out of a MIDI file is new and has been tested
     // against files this program generated rather than against the ones a
     // sequencer or an old librarian writes, so a wrong answer is more likely here
@@ -1972,18 +2053,6 @@ async function loadSyx(file) {
                      + 'before writing anything to the synth — and if they do not, the '
                      + 'file would be very welcome as a bug report.');
     }
-  }
-  // The file records the channel it was dumped on. It is not adopted, because the
-  // channel this program sends on is a setting the other builds share; but a
-  // mismatch is worth one line, since it is the usual reason a transfer does
-  // nothing at all.
-  if (bank.channel !== state.cfg.synthChannel) {
-    logLibrary(`         it was dumped on MIDI channel ${bank.channel}; cc2juno is set `
-               + `to channel ${state.cfg.synthChannel}`);
-  }
-  if (bank.extraBlocks.length) {
-    logLibrary(`         ${bank.extraBlocks.length} MKS-50 patch/chord block(s) kept `
-               + 'and written back unchanged');
   }
   refresh();
 }
@@ -2056,9 +2125,14 @@ function copyAllFromSource() {
   const rows = library.source.bank.occupied();
   if (!rows.length) return;
   const holding = library.working.bank.count();
-  if (holding && !confirm(`Copy ${rows.length} patch(es) into the synth memory from `
-                          + `slot 11 onward? ${Math.min(holding, rows.length)} slot(s) `
-                          + 'there will be overwritten. Nothing is sent to the synth.')) {
+  // Which bank, when the file holds several: it is the one on show, and saying so
+  // is cheaper than finding out afterwards that it was not the one meant.
+  const which = library.source.banks.length > 1
+    ? ` (bank ${library.source.bankIndex + 1} of ${library.source.banks.length})` : '';
+  if (holding && !confirm(`Copy ${rows.length} patch(es)${which} into the synth memory `
+                          + `from slot 11 onward? ${Math.min(holding, rows.length)} `
+                          + 'slot(s) there will be overwritten. Nothing is sent to the '
+                          + 'synth.')) {
     return;
   }
   library.working.place(rows.map((i) => library.source.bank.get(i)), 0);
@@ -2541,9 +2615,13 @@ function wire() {
     event.target.value = '';       // so the same file can be picked again
   });
   $('syx-input').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (file) await loadSyx(file);
+    // Copied out of the input before it is cleared. `files` is a live FileList
+    // bound to the element, so resetting the value empties the very list we are
+    // about to read -- which presents as the file picker doing nothing at all.
+    // The File objects themselves stay readable once they are out.
+    const files = [...event.target.files];
     event.target.value = '';       // so the same file can be picked again
+    if (files.length) await loadPatchFiles(files);
   });
 
   // ---- transfers

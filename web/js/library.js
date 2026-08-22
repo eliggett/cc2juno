@@ -35,6 +35,10 @@ export class PatchPane {
     editable = false,
     showEmpty = false,
     emptyHint = '',
+    // What the filename line says when there is no file. It is not left blank,
+    // because an empty line collapses and the two panes of the manager then start
+    // their lists at different heights.
+    emptySource = '',
     onAudition = null,       // (index, tone) -- the selection came to rest
     onChange = null,         // (description) -- the bank was edited here
     onSelect = null,         // (indices) -- immediately, on every change
@@ -44,11 +48,16 @@ export class PatchPane {
     this.editable = editable;
     this.showEmpty = showEmpty;
     this.emptyHint = emptyHint;
+    this.emptySource = emptySource;
     this.onAudition = onAudition;
     this.onChange = onChange;
     this.onSelect = onSelect;
 
-    this.bank = new Bank();
+    // A file may hold several banks; the synth's memory is always exactly one.
+    // Both are the same shape here -- an array and an index into it -- so nothing
+    // below has to care which kind of pane it is in.
+    this.banks = [new Bank()];
+    this.bankIndex = 0;
     this.sourceName = '';
     this.selection = new Set();
     this.anchor = null;        // where a shift-click measures its range from
@@ -85,6 +94,25 @@ export class PatchPane {
     this.subtitle = document.createElement('p');
     this.subtitle.className = 'patch-pane-source';
 
+    // Only ever on screen for a file holding more than one bank, which is why it
+    // is a row of its own: in Live Patch the pane is a third of the width, and a
+    // control that appears inside the heading would reflow it as files change.
+    this.bankBar = document.createElement('div');
+    this.bankBar.className = 'patch-banks is-single';
+    this.bankPrev = document.createElement('button');
+    this.bankPrev.className = 'small';
+    this.bankPrev.textContent = '◀';
+    this.bankPrev.title = 'The bank before this one in the file';
+    this.bankPrev.addEventListener('click', () => this.showBank(this.bankIndex - 1));
+    this.bankLabel = document.createElement('span');
+    this.bankLabel.className = 'patch-banks-label';
+    this.bankNext = document.createElement('button');
+    this.bankNext.className = 'small';
+    this.bankNext.textContent = '▶';
+    this.bankNext.title = 'The next bank in the file';
+    this.bankNext.addEventListener('click', () => this.showBank(this.bankIndex + 1));
+    this.bankBar.append(this.bankPrev, this.bankLabel, this.bankNext);
+
     this.list = document.createElement('div');
     this.list.className = 'patch-list';
     this.list.tabIndex = 0;
@@ -106,19 +134,48 @@ export class PatchPane {
       });
     }
 
-    this.el.append(head, this.subtitle, this.list, this.empty);
+    this.el.append(head, this.subtitle, this.bankBar, this.list, this.empty);
     this.render();
   }
 
   // ---------------------------------------------------------------- state ---
+  /** The bank on show. Everything that edits a pane edits this one. */
+  get bank() {
+    return this.banks[this.bankIndex];
+  }
+
   setBank(bank, sourceName = '') {
-    this.bank = bank;
+    this.setBanks([bank], sourceName);
+  }
+
+  setBanks(banks, sourceName = '') {
+    this.banks = banks.length ? banks : [new Bank()];
+    this.bankIndex = 0;
     this.sourceName = sourceName;
     this.selection.clear();
     this.anchor = null;
     this.editing = null;
     this.rows.clear();
+    this.cancelAudition();
     this.render();
+  }
+
+  /**
+   * Show another bank of the same file.
+   *
+   * The selection is dropped rather than carried over. Slot 32 of bank 2 is a
+   * different patch from slot 32 of bank 1, and a selection that survived the
+   * change would mean the next Copy took something nobody had looked at.
+   */
+  showBank(index) {
+    if (index === this.bankIndex || index < 0 || index >= this.banks.length) return;
+    this.bankIndex = index;
+    this.selection.clear();
+    this.anchor = null;
+    this.editing = null;
+    this.cancelAudition();
+    this.render();
+    if (this.onSelect) this.onSelect([]);
   }
 
   get selected() {
@@ -157,8 +214,19 @@ export class PatchPane {
 
     const total = this.bank.count();
     this.countEl.textContent = total ? `${total} patch${total === 1 ? '' : 'es'}` : '';
-    this.subtitle.textContent = this.sourceName || '';
-    this.subtitle.hidden = !this.sourceName;
+    // The bank on show names its own source when it has one, because several
+    // files can be open at once and each bank came from one of them.
+    const label = this.bank.source || this.sourceName || this.emptySource;
+    this.subtitle.textContent = label;
+    this.subtitle.hidden = !label;
+
+    // A class rather than the hidden attribute: the stylesheet makes [hidden]
+    // display:none !important, and the manager needs to be able to keep this
+    // row's height in one pane while the other is the one using it.
+    this.bankBar.classList.toggle('is-single', this.banks.length < 2);
+    this.bankLabel.textContent = `Bank ${this.bankIndex + 1} of ${this.banks.length}`;
+    this.bankPrev.disabled = this.bankIndex === 0;
+    this.bankNext.disabled = this.bankIndex >= this.banks.length - 1;
   }
 
   /**

@@ -157,6 +157,15 @@ A `.mid` holding the same dump works too — see **MIDI files** below. Which of 
 two a file is gets decided by reading it, not by its name, since plenty of banks
 are saved as `.mid` and plenty of MIDI files end up called `.syx`.
 
+**Several files can be opened at once**, and a file holding more than one bank is
+read as several. Either way you get a `Bank 1 of 3  ◀ ▶` row under the filename —
+see **Files of several banks**.
+
+The two panes keep their rows lined up — heading, filename, bank arrows, list —
+so a patch on the right is always level with the slot it would land in on the
+left. That holds however many buttons the left pane's heading has wrapped onto a
+second line, and whether or not either pane has bank arrows.
+
 **The left-hand pane is the synth's 64 memories.** It starts empty. Fill it by
 receiving a dump, by opening a file straight into it, by dragging patches over
 from the right, or with **◀ Copy All**, which takes the whole file and lays it in
@@ -223,6 +232,65 @@ instrument, are told apart and reported differently; so is one full of Alpha Jun
 messages that are not bulk dumps, which is what a recording of somebody editing
 looks like and which no librarian can turn back into a bank.
 
+### Files of several banks
+
+A synth has 64 memories. A *file* is under no such obligation, and plenty in
+circulation hold several banks — someone joined two dumps end to end, or a
+librarian exported a whole collection. Those get a `Bank 1 of 3  ◀ ▶` row and
+every bank is browsable, auditionable, and draggable into the synth memory;
+**◀ Copy All** takes whichever bank is on show, and says which one that is before
+it overwrites anything.
+
+This matters because the alternative is silent. Read into a single bank, the
+later banks overwrite the earlier ones slot for slot — leaving a healthy-looking
+64 patches that are simply not the ones the file was named after, with nothing
+anywhere to say a bank had been thrown away.
+
+Two shapes turn up and both are handled. Usually each bank addresses slots 11–88
+and there is nothing between them to mark the join, so the giveaway is a message
+landing on a slot this bank has already been given — which inside one genuine
+dump never happens. Less often the messages address slots past 88, in which case
+the bank number is in the address itself.
+
+The **synth-memory pane never browses**: it is a picture of 64 real addresses, so
+anything opened into it takes the first bank and says so, however many files or
+banks were chosen. To put a
+different one in the synth, open the file on the right, step to that bank, and
+Copy All.
+
+A short file is still one bank, not several — sixteen patches do not become four
+banks of four just because the file ends early.
+
+**Or just select several files.** The Open button takes a multiple selection, and
+each file becomes a bank in the order it was chosen — so a folder of single-bank
+dumps browses exactly like one joined file, without joining anything. The filename
+line under the heading tracks the bank you are looking at, so you always know
+which file the patches on screen came from. A file that itself held several banks
+says which of its own, as `collection.syx — 2 of 3`.
+
+A file that cannot be read costs that file and not the rest: the others still
+load, and the one that failed is named in a warning. Only if *every* file fails is
+it an error, and the pane is left as it was.
+
+**Joining them into one file is just `cat`:**
+
+    cat FACTORYA.SYX FACTORYB.SYX MIKEJUNO.SYX > collection.syx
+
+Nothing else is needed — no header, no separator. That is what a multi-bank file
+*is*, and joining dumps end to end is how nearly every one in circulation was
+made. Files that pick up padding along the way are fine too: a trailing `0D 0A`
+from a text-mode transfer, or a stray `F7`, is stepped over.
+
+That is worth doing when you want one file to keep, rather than a selection to
+browse. One case is worth knowing about because it used to be destructive. `EZBANK1.SYX`
+in the MKS-50 collection ends with a dangling `F0` and no `F7`. On its own that
+is harmless — the `F0` runs off the end of the file. Joined to another bank, a
+reader that looks for the next `F7` runs on into the following file and swallows
+its first message, costing four patches and leaving a bank that is mysteriously
+four short. cc2juno ends a message at `F7` or not at all: between `F0` and `F7` a
+sysex carries data bytes only, so any other status byte means that message was
+cut short and is abandoned rather than allowed to consume the next one.
+
 ### Receiving a dump
 
 Press **Receive**, then on the synth:
@@ -272,6 +340,9 @@ and the controls jump.
 It is for playing a file rather than filing it — 64 sounds on tap without ever
 touching the synth's memory or its patch buttons. The list stays put while the
 panel scrolls, and the display reads `T` plus the slot in the list, as above.
+
+The bank row appears here too, so a collection file of several hundred patches can
+be played straight through without leaving the controls.
 
 Once the synth-memory pane holds something, a **Patch file / Synth memory** switch
 appears above the list and either can be played from. Until then there is no
