@@ -791,7 +791,13 @@ function onPanelInput(paramIndex, value) {
       : aj.ccForValue(param, value));
     return;
   }
+  // Nothing else redraws this path until the message actually leaves the queue,
+  // a rate-limited moment later -- and the star is true the instant the slider
+  // moves, not when the synth is told. Only the display needs it, and only on the
+  // first move after a patch was loaded, so that is all that is redrawn.
+  const wasEdited = router.edited;
   router.sendParam(paramIndex, value);
+  if (router.edited !== wasEdited) refreshLcd();
 }
 
 function refreshPanel() {
@@ -807,12 +813,12 @@ function refreshPanel() {
 /**
  * Five slots that hold a whole sound, and put it back.
  *
- * Recording is offered only when all 36 parameters are known, which in practice
+ * Storing is offered only when all 36 parameters are known, which in practice
  * means the synth has announced a patch and cc2juno has been following the edits
  * since. The reason is in presets.js: a preset assembled from the handful of
  * parameters that happen to have been touched would recall differently every
  * time, depending on what the synth was already holding. Rather than let the
- * button record something that behaves like that, it stays off and the note
+ * button store something that behaves like that, it stays off and the note
  * underneath says what is missing.
  *
  * Recall is always available for a slot that holds something. It sends the whole
@@ -849,7 +855,12 @@ function buildPresets() {
  * the keyboard focus out of whichever one the user was on.
  */
 function renderPresets() {
-  const showing = state.mode === 'perform';
+  // Wherever the controls are: Perform and Live Patch both. Live Patch is a
+  // performance view with a patch list beside it, so the row of slots is as
+  // much use there as it is under the bare controls -- more, since a sound
+  // auditioned out of a file is exactly the kind of thing worth keeping hold
+  // of before clicking the next one.
+  const showing = performing() && showsControls();
   $('presets').hidden = !showing;
   if (!showing) return;
 
@@ -878,7 +889,7 @@ function renderPresets() {
       title: complete
         ? (preset
           ? `Replace slot ${slot} with the current settings`
-          : `Record the current settings into slot ${slot}`)
+          : `Store the current settings in slot ${slot}`)
         : 'The current settings are not fully known yet',
     });
   }
@@ -894,7 +905,7 @@ function setButton(button, { text, disabled, title }) {
 }
 
 /**
- * The line under the row, which exists for one question: why is Record off?
+ * The line under the row, which exists for one question: why is Store off?
  *
  * A disabled button with no explanation reads as a broken button, and this one
  * is off for most of the first minute of every session -- until the synth is
@@ -908,13 +919,13 @@ function renderPresetNote(values, complete) {
 
   if (complete) {
     note.textContent = bank.count()
-      ? `${bank.count()} of ${bank.size} slots recorded.`
-      : 'Record the current settings into a slot to keep them.';
+      ? `${bank.count()} of ${bank.size} slots stored.`
+      : 'Store the current settings in a slot to keep them.';
     note.classList.remove('is-warn');
     return;
   }
 
-  note.textContent = `Recording needs all 36 parameters, and ${known} `
+  note.textContent = `Storing needs all 36 parameters, and ${known} `
     + `${known === 1 ? 'is' : 'are'} known so far — choose a patch on the synth, `
     + 'with its MIDI out connected, and cc2juno will read the whole sound in.';
   note.classList.add('is-warn');
@@ -924,11 +935,12 @@ function storePreset(index) {
   const values = router.knownValues();
   if (!isComplete(values)) return;
 
-  // The synth's own name for the sound if it gave one, since that is what the
-  // user will be looking for. The library will let this be edited later.
-  const preset = bank.store(index, values, { name: router.toneName });
+  // The name of whatever is actually loaded, which is the same question the
+  // display answers -- so the slot ends up called what the screen was calling it
+  // at the moment Store was pressed. The library will let this be edited later.
+  const preset = bank.store(index, values, { name: loadedName() });
   savePresets();
-  logLine(`preset   ${pad('', 9)}-> slot ${index + 1} recorded`
+  logLine(`preset   ${pad('', 9)}-> slot ${index + 1} stored`
           + (preset.name ? ` as "${preset.name}"` : ''), 'layer');
   renderPresets();
 }
@@ -971,10 +983,32 @@ function patchReading() {
   // sound loaded is the one in that slot, not the patch whose number the synth
   // last announced, and the synth's own display has no way of saying so since it
   // does not know the slot exists.
+  // The star rides along with either of the two below rather than being a case of
+  // its own: it says the sound has been altered since it was loaded, which is as
+  // true of a slot recalled from here as it is of a patch chosen on the synth.
   if (router.recalled) {
-    return { slot: router.recalled.slot, name: router.recalled.name };
+    return { slot: router.recalled.slot, name: router.recalled.name, edited: router.edited };
   }
-  return { program: router.patch, name: router.toneName };
+  return { program: router.patch, name: router.toneName, edited: router.edited };
+}
+
+/**
+ * What the loaded sound is called, by whichever named it last.
+ *
+ * Two things name a sound here and either can be the newer: the synth announces
+ * a tone dump when a patch is chosen on the instrument, and cc2juno sends a
+ * whole tone when a preset is recalled or a patch is auditioned out of a file.
+ * Recency is already tracked -- router.recalled is set by the second and cleared
+ * by the first -- so this is the same precedence patchReading() puts on the
+ * screen, asked for as a name on its own.
+ *
+ * A recall with no name gives '' rather than falling through to the synth's
+ * name. Falling through would label an unnamed sound with the patch that was
+ * loaded before it, which is a different sound and the wrong answer; empty is
+ * merely unhelpful, and that is the honest one.
+ */
+function loadedName() {
+  return router.recalled ? router.recalled.name : router.toneName;
 }
 
 /**
@@ -1034,7 +1068,7 @@ function refreshStage() {
   // The preset row sits under both views and outlives the switch between them.
   // It is redrawn here rather than only in refresh() because what it can offer
   // changes with the traffic: the parameter that just went out may have been the
-  // last unknown one, which is the moment Record becomes possible.
+  // last unknown one, which is the moment Store becomes possible.
   renderPresets();
   if (showingPanel()) {
     refreshPanel();
@@ -1773,7 +1807,7 @@ function buildLibrary() {
   );
 
   library.source.actions.append(
-    paneButton('Open .syx…', 'Open bank files to browse — raw .syx dumps, or .mid with '
+    paneButton('Open syx file(s)', 'Open bank files to browse — raw .syx dumps, or .mid with '
                              + 'the dump saved inside. Choose several and each one '
                              + 'becomes a bank you can step through',
                () => openSyx('source')),

@@ -1057,7 +1057,7 @@ check('a recalled slot takes over the display', () => {
   router.sendTone(OTHER_VALUES, { slot: presets.slotLabel(0), name: 'Fat Brass' });
   equal(router.recalled, { slot: 'T1', name: 'Fat Brass' });
   equal(lcd.displayText({ slot: router.recalled.slot, name: router.recalled.name }),
-        'T1     Fat Brass ');
+        'T1    Fat Brass ');
 });
 
 check('a slot label is T1 through T5, and fits where M-11 fits', () => {
@@ -1072,7 +1072,7 @@ check('a slot label is T1 through T5, and fits where M-11 fits', () => {
 });
 
 check('a preset recorded before the synth named anything shows as half known', () => {
-  equal(lcd.displayText({ slot: 'T3', name: '' }), 'T3     ----------');
+  equal(lcd.displayText({ slot: 'T3', name: '' }), 'T3    ----------');
 });
 
 check('the synth taking over ends the recall', () => {
@@ -1101,6 +1101,70 @@ check('editing a parameter does not end the recall', () => {
 
   router.applyParam(aj.lookup('VCF Cutoff').index, 99);   // and one on the synth
   equal(router.recalled, { slot: 'T2', name: 'Fat Brass' });
+});
+
+check('a moved parameter stars the patch, whichever side moved it', () => {
+  // The instrument does this itself: once the edit buffer is no longer the sound
+  // that was loaded, a star appears beside the number to say so.
+  const byKnob = makeRouter();
+  byKnob.router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  equal(byKnob.router.edited, false, 'a patch just loaded is the patch');
+  byKnob.cc(2, 70);
+  equal(byKnob.router.edited, true, 'a knob on the controller');
+
+  const byPanel = makeRouter().router;
+  byPanel.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  byPanel.sendParam(aj.lookup('VCF Cutoff').index, 99);
+  equal(byPanel.edited, true, 'a slider on the panel');
+
+  const bySynth = makeRouter().router;
+  bySynth.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  bySynth.applyParam(aj.lookup('VCF Cutoff').index, 99);
+  equal(bySynth.edited, true, "the synth's own panel, which is starring it too");
+});
+
+check('a knob that lands on the value it already had does not star anything', () => {
+  // Inside the dead zone at a region edge, or simply not far enough to change the
+  // parameter. Nothing was sent, so the sound is still the sound that was loaded.
+  const { router, cc } = makeRouter();
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  const knob = cfgmod.parseText(TWO_LAYERS, 'two layers').cfg.layers[0].byCc.get(2);
+  const param = cfgmod.paramFor(knob);
+  cc(2, 70);
+  const settled = router.pending.get(param.index).value;
+  router.lastSend = 0; router.flush();
+  router.edited = false;                     // as loading a patch would leave it
+  cc(2, aj.ccForValue(param, settled));      // same value again
+  equal(router.edited, false);
+});
+
+check('loading a whole sound clears the star', () => {
+  // Three ways in and all of them mean the same thing: what is in the edit buffer
+  // is a stored sound again rather than an altered one.
+  for (const load of [
+    (router) => router.applyTone(OTHER_VALUES, { name: 'JunoStrng1' }),
+    (router) => router.setPatch(12),
+    (router) => router.sendTone(OTHER_VALUES, { slot: 'T1', name: 'Fat Brass' }),
+  ]) {
+    const { router, cc } = makeRouter();
+    router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+    cc(2, 70);
+    equal(router.edited, true);
+    load(router);
+    equal(router.edited, false);
+  }
+});
+
+check('recalling the preset already loaded clears the star even though nothing is sent', () => {
+  // The slot's sound is what is in the buffer, so it is not an edited anything --
+  // and this is exactly the case where no message goes out to prove it.
+  const { router, cc, drain } = makeRouter();
+  router.applyTone(APR_VALUES, { name: 'PolySynth1' });
+  cc(2, 70);
+  drain();
+  equal(router.edited, true);
+  equal(router.sendTone(router.knownValues(), { slot: 'T4', name: 'Same Sound' }), 0);
+  equal(router.edited, false);
 });
 
 check('recalling the loaded preset still says so on the display', () => {
@@ -1170,24 +1234,83 @@ check('every slot is a bank 1-8 and an instrument 1-8, and nothing else', () => 
 
 check('the display shows the slot and the tone name, as the synth does', () => {
   const preset = tonein.parseToneMessage(APR);
-  equal(lcd.displayText({ program: 64, name: preset.name }), 'P-11   PolySynth1');
+  equal(lcd.displayText({ program: 64, name: preset.name }), 'P-11  PolySynth1');
 
   const memory = tonein.parseToneMessage(MEMORY);
   equal(memory.values.length, 36);
-  equal(lcd.displayText({ program: 0, name: memory.name }), 'M-11   JunoStrng1');
+  equal(lcd.displayText({ program: 0, name: memory.name }), 'M-11  JunoStrng1');
 });
 
 check('a half-known patch is shown as half known', () => {
   // The tone data and the program change are two messages, so the screen really
   // does pass through each of these.
-  equal(lcd.displayText({}), '----   ----------');
-  equal(lcd.displayText({ program: 87 }), 'P-38   ----------');
-  equal(lcd.displayText({ name: 'Moogie' }), '----   Moogie    ');
+  equal(lcd.displayText({}), '----  ----------');
+  equal(lcd.displayText({ program: 87 }), 'P-38  ----------');
+  equal(lcd.displayText({ name: 'Moogie' }), '----  Moogie    ');
+});
+
+check('an edited sound is starred where the synth stars it', () => {
+  // Right of the number, in the space that is already there -- so the star costs
+  // no room and nothing after it moves.
+  equal(lcd.displayText({ program: 64, name: 'PolySynth1' }), 'P-11  PolySynth1');
+  equal(lcd.displayText({ program: 64, name: 'PolySynth1', edited: true }),
+        'P-11* PolySynth1');
+
+  const plain = lcd.displayText({ program: 0, name: 'JunoStrng1' });
+  const starred = lcd.displayText({ program: 0, name: 'JunoStrng1', edited: true });
+  equal(starred.length, plain.length, 'the star must not widen the line');
+  equal(starred.indexOf('JunoStrng1'), plain.indexOf('JunoStrng1'),
+        'the name must not shuffle sideways when the star appears');
+  equal(starred.replace(lcd.EDITED_MARK, ' '), plain, 'a space is all it replaces');
+
+  // Slots of our own are starred in the same column, since they occupy the same
+  // four characters the synth's own labels do.
+  equal(lcd.displayText({ slot: 'T1', name: 'Fat Brass', edited: true }),
+        'T1  * Fat Brass ');
+  // A transfer has the whole line, and there is no patch on screen to star.
+  equal(lcd.displayText({ text: 'SEND 07/16', edited: true }), 'SEND 07/16      ');
+});
+
+check('the two fields join back up into exactly the line', () => {
+  // The split is where the display's fields meet, not a rewrite of the line: the
+  // one description of what the screen reads is still displayText.
+  for (const patch of [{}, { program: 0, name: 'JunoStrng1' },
+                       { program: 0, name: 'JunoStrng1', edited: true },
+                       { slot: 'T1', name: 'Fat Brass', edited: true },
+                       { program: 87 }, { name: 'Moogie' }]) {
+    const { head, name } = lcd.displayParts(patch);
+    equal(head + name, lcd.displayText(patch), JSON.stringify(patch));
+    equal(head.length, lcd.HEAD_COLUMNS, 'the slot field is a fixed number of cells');
+    equal(name.length, lcd.NAME_WIDTH, 'and so is the name');
+  }
+});
+
+check('the name field holds still while the slot field changes under it', () => {
+  // The whole point of the split. Every one of these writes something different
+  // to the left of the name, and none of them may move it.
+  const heads = [
+    lcd.displayParts({ program: 0, name: 'JunoStrng1' }),          // M-11, narrow digits
+    lcd.displayParts({ program: 63, name: 'JunoStrng1' }),         // M-88, wide ones
+    lcd.displayParts({ program: 0, name: 'JunoStrng1', edited: true }),
+    lcd.displayParts({ slot: 'T1', name: 'JunoStrng1' }),
+    lcd.displayParts({ name: 'JunoStrng1' }),                      // nothing known yet
+  ];
+  for (const part of heads) equal(part.name, 'JunoStrng1', `head ${JSON.stringify(part.head)}`);
+});
+
+check('a transfer message is one field, not two', () => {
+  // Cutting a sentence at column seven would open a gap in the middle of a word,
+  // and there is no tone name beside it to hold still for.
+  const { head, name } = lcd.displayParts({ text: 'SEND 07/16' });
+  equal(head, 'SEND 07/16      ');
+  equal(name, '');
+  equal(head + name, lcd.displayText({ text: 'SEND 07/16' }));
 });
 
 check('the display is always exactly one line of COLUMNS characters', () => {
   const lines = [
     lcd.displayText({}),
+    lcd.displayText({ program: 0, name: 'JunoStrng1', edited: true }),
     lcd.displayText({ program: 0, name: 'JunoStrng1' }),
     lcd.displayText({ program: 127, name: 'A' }),
     // A name longer than the synth can send is cut rather than pushing the line

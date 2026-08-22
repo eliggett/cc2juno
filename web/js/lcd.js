@@ -16,8 +16,27 @@
 
 export const NAME_WIDTH = 10;    // characters of tone name, as the synth sends
 export const SLOT_WIDTH = 4;     // 'M-11', 'P-88', and anything standing in for one
-const GAP = '   ';               // between the slot and the name
-export const COLUMNS = SLOT_WIDTH + GAP.length + NAME_WIDTH;
+const GAP = '  ';                // between the slot and the name, as the synth spaces it
+export const EDITED_MARK = '*';  // stands in the first of those spaces; see displayText
+export const COLUMNS = SLOT_WIDTH + GAP.length + NAME_WIDTH;   // 16, as the hardware is
+export const HEAD_COLUMNS = SLOT_WIDTH + GAP.length;   // the slot field, star included
+
+/**
+ * One character cell, as a fraction of the font size.
+ *
+ * Matrix Sans is a dot-matrix face and every glyph is a whole number of dot
+ * columns wide -- but not the same number: '1' is four columns, a space is five,
+ * '*' and most capitals are six. A real LCD has no such thing. Every character
+ * gets a cell and stays in it, which is why the star can replace a space on the
+ * hardware without the name moving, and why writing the line as one run of text
+ * here made the name shuffle sideways when the star appeared.
+ *
+ * So the line is drawn as two fields placed on this grid rather than as one run
+ * of text. 0.6em is the widest glyph in the face, which is also what CSS `ch`
+ * measures for it, so a field of N cells holds N characters of any sort and can
+ * never overflow into the field after it.
+ */
+export const CELL_EM = 0.6;
 const BANK_SIZE = 8;
 const BANKS = 8;
 const MEMORIES = BANK_SIZE * BANKS;
@@ -49,6 +68,12 @@ export function patchLabel(program) {
  * and padded to the same width the synth's own labels occupy, so the tone name
  * stays in the column it is always in.
  *
+ * `edited` puts a star in the space immediately right of the slot, which is what
+ * the instrument does once the sound in the edit buffer is no longer the sound
+ * that was loaded. It takes a space rather than adding a character, so the name
+ * stays in its column and the line stays the width it always is -- the star
+ * appearing must not make everything after it shuffle sideways.
+ *
  * `text` gives the whole line over to something that is not a patch at all: a
  * bulk transfer counting messages, or a prompt to go and press three buttons on
  * the synth. Those take five to ten seconds and the display is the only thing on
@@ -56,14 +81,34 @@ export function patchLabel(program) {
  * over everything else, and is padded to the same fixed width so the screen never
  * changes size with what is on it.
  */
-export function displayText({ program = null, name = '', slot = null, text = null } = {}) {
+export function displayText({ program = null, name = '', slot = null, text = null,
+                              edited = false } = {}) {
   if (text !== null && text !== undefined) {
     return String(text).slice(0, COLUMNS).padEnd(COLUMNS);
   }
   const label = (slot || patchLabel(program) || '----')
     .slice(0, SLOT_WIDTH).padEnd(SLOT_WIDTH);
+  const gap = edited ? EDITED_MARK + GAP.slice(1) : GAP;
   const tone = name ? name.slice(0, NAME_WIDTH).padEnd(NAME_WIDTH) : '-'.repeat(NAME_WIDTH);
-  return `${label}${GAP}${tone}`;
+  return `${label}${gap}${tone}`;
+}
+
+/**
+ * The line split where the display's two fields meet.
+ *
+ * The slot, its star and the gap after it are one field; the tone name is the
+ * other, and it starts at a fixed cell so that nothing happening on the left can
+ * move it. Joined back together these are exactly displayText(), which stays the
+ * one description of what the line reads.
+ *
+ * A message is one field rather than two: it is a sentence, not a slot and a
+ * name, and cutting it at column seven would open a gap in the middle of a word.
+ * It is given to the head, which is allowed to grow past its cells to hold it.
+ */
+export function displayParts(patch = {}) {
+  const line = displayText(patch);
+  if (patch.text !== null && patch.text !== undefined) return { head: line, name: '' };
+  return { head: line.slice(0, HEAD_COLUMNS), name: line.slice(HEAD_COLUMNS) };
 }
 
 /**
@@ -83,6 +128,14 @@ export class Lcd {
     this.line = document.createElement('span');
     this.line.className = 'lcd-text';
 
+    // Two fields on the cell grid rather than one run of text; see displayParts.
+    // The line element stays, so its textContent is still the whole line.
+    this.head = document.createElement('span');
+    this.head.className = 'lcd-head';
+    this.name = document.createElement('span');
+    this.name.className = 'lcd-name';
+    this.line.append(this.head, this.name);
+
     this.screen.append(this.line);
     this.el.append(this.screen);
     this.set({});
@@ -92,8 +145,16 @@ export class Lcd {
     const text = displayText(patch);
     if (text === this.text) return;
     this.text = text;
-    this.line.textContent = text;
+    const parts = displayParts(patch);
+    this.head.textContent = parts.head;
+    this.name.textContent = parts.name;
     // Read out as one thing rather than as sixteen characters of segment font.
-    this.el.setAttribute('aria-label', `Synth patch: ${text.replace(/-{2,}/g, 'unknown')}`);
+    // The star is a symbol rather than part of the name -- no tone name can
+    // contain one, since the synth's six-bit charset has no star in it -- so it
+    // is spoken as a word at the end instead of as punctuation in the middle.
+    const starred = text.includes(EDITED_MARK);
+    const spoken = text.replace(EDITED_MARK, ' ').replace(/-{2,}/g, 'unknown');
+    this.el.setAttribute('aria-label',
+                         `Synth patch: ${spoken}${starred ? ', edited' : ''}`);
   }
 }

@@ -440,9 +440,24 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   /* A real display does not change size with what is on it, and this face is
    * not quite fixed-pitch -- '1' and 'l' are narrower than the rest -- so the
    * line is given the room the longest one needs and starts at the left of it.
-   * Wide enough for 17 characters of the widest sort, with a little to spare. */
-  width: 10.2em;
+   * 16 characters of the widest sort, which is 16 cells at 0.6em each. */
+  width: 9.6em;
   text-align: left;
+}
+
+/* The slot field, held to seven character cells so that the tone name beside it
+ * starts in the same place whatever is written here -- an edit star appearing,
+ * or M-11 becoming M-88, which is four narrow digits becoming four wide ones.
+ * Without this the name slides sideways as the left of the line changes, which
+ * no LCD does: a real one gives every character a cell and leaves it there.
+ *
+ * 1ch is this face's widest glyph exactly (see CELL_EM in js/lcd.js), so six of
+ * them hold six characters of any sort. It is a floor rather than a fixed width
+ * because a transfer message is given this field alone and is longer than it --
+ * those need the whole line, and there is no name beside them to push. */
+.lcd .lcd-head {
+  display: inline-block;
+  min-width: 6ch;
 }
 
 /* The panel's own display, drawn into the SVG rather than over it. */
@@ -530,7 +545,7 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* An empty slot borrows the mode bar's language for a room with nothing in it:
- * same outline as its neighbours, drawn dashed. A Record button that is off is
+ * same outline as its neighbours, drawn dashed. A Store button that is off is
  * saying something different -- not empty, but not possible yet -- so it keeps
  * the plain grey the rest of the app's unavailable buttons wear. */
 #preset-recall .preset-slot:disabled,
@@ -539,7 +554,7 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
   border-style: dashed;
 }
 
-/* Recording over a slot cannot be undone, so the button says so on the way in
+/* Storing over a slot cannot be undone, so the button says so on the way in
  * rather than afterwards in a dialog. Only on hover: five permanently red
  * buttons under the panel would read as five faults. */
 .preset-record:hover:not(:disabled) {
@@ -987,6 +1002,30 @@ main.no-side { grid-template-columns: minmax(0, 1fr); }
  * has something in it, since the alternative would be 64 blank rows. */
 .live-switch { flex: 0 0 auto; }
 .live-switch button { flex: 1; }
+
+/* Live Patch with no file open yet: the mode does nothing at all until one is
+ * opened, and with the manager's buttons hidden here this is the only button in
+ * the pane. So it gets the size and the glow until it has been used, and then
+ * goes back to being an ordinary small button among the patch names.
+ *
+ * Green rather than the amber accent because it is an invitation, not a value,
+ * and because amber is what the sliders use for numbers -- the two should not
+ * read as the same kind of thing. Manager side deliberately untouched: five
+ * buttons with one of them glowing is noise, not a signpost. */
+.live-pane .patch-pane.is-empty .patch-pane-actions button {
+  font-size: 14px;
+  padding: 8px 14px;
+  color: var(--ok);
+  border-color: var(--ok);
+  box-shadow: 0 0 10px rgba(125, 220, 130, 0.35),
+              inset 0 0 8px rgba(125, 220, 130, 0.10);
+}
+.live-pane .patch-pane.is-empty .patch-pane-actions button:hover {
+  background: rgba(125, 220, 130, 0.12);
+  border-color: var(--ok);
+  box-shadow: 0 0 14px rgba(125, 220, 130, 0.55),
+              inset 0 0 8px rgba(125, 220, 130, 0.16);
+}
 
 /* The pane element is shared with Patch Manager, and most of its buttons are
  * organising rather than playing: writing all 64 to the synth is not something

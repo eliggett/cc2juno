@@ -383,7 +383,7 @@ Then:
   numbers them — so the second digit runs 1-8 and never reaches 9. There is one
   above the knob grid and one on the PG-300, under the wordmark where Roland left
   the panel blank. The two halves arrive separately, the tone data first and the
-  program number just behind it, so a screen reading `----   PolySynth1` for a
+  program number just behind it, so a screen reading `----  PolySynth1` for a
   moment is it waiting for the second half rather than anything being wrong.
 
   The face is Matrix Sans Screen, the variant with separate square dots. The

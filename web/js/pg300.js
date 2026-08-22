@@ -23,7 +23,7 @@
 // makes.
 
 import * as aj from './alpha_juno.js';
-import { displayText } from './lcd.js';
+import { displayText, displayParts, CELL_EM, COLUMNS, HEAD_COLUMNS } from './lcd.js';
 import { GLYPHS } from './pg300_glyphs.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -69,15 +69,22 @@ const MARGIN = 5;
  * middle of a box. Descenders hang below that, and there is room for them.
  */
 const LCD = {
-  width: 170,
   height: 25,
   top: 121,
   padX: 7,          // bezel at the sides
   padY: 3.5,        // bezel above and below
-  fontSize: 14,     // the longest line the display can hold, inside the screen
+  fontSize: 14,     // sized so the longest line fits the screen; see width below
   capHeight: 0.7,   // Matrix Sans Screen, from its OS/2 table
-  inset: 6,         // from the left of the screen to the first character
+  inset: 6,         // from the screen's edge to the first and last character
 };
+
+// As wide as the line needs and no wider: sixteen character cells, a margin of
+// `inset` at each end of the screen, and the bezel outside that. Worked out here
+// rather than written down, because a number written down has to be measured
+// again every time the line changes width -- which is what left too much blank
+// screen past the tone name when the gap between the slot and the name went from
+// three spaces to two. The box is centred on the panel, so it narrows evenly.
+LCD.width = 2 * LCD.padX + 2 * LCD.inset + COLUMNS * CELL_EM * LCD.fontSize;
 
 /**
  * The mark beside the wordmark, and the lockup the two of them make.
@@ -484,7 +491,7 @@ export class Pg300Panel {
       element('rect', { class: 'lcd-screen', ...screen }),
     );
 
-    this.lcd = text(displayText({}), {
+    this.lcd = text('', {
       class: 'lcd-text',
       // Anchored to the left of the screen rather than centred on it: the face
       // is not quite fixed-pitch, so a centred line would shuffle sideways every
@@ -498,6 +505,16 @@ export class Pg300Panel {
       // and a short name drags the whole line off centre.
       'xml:space': 'preserve',
     });
+    // The same two fields the HTML display uses, and for the same reason -- but
+    // pinned by an x of their own rather than by a CSS width, since that is how
+    // SVG places text. The name sits seven cells in whatever the slot beside it
+    // is written with, so a star appearing cannot nudge it along.
+    this.lcdHead = element('tspan', {});
+    this.lcdName = element('tspan', {
+      x: screen.x + LCD.inset + HEAD_COLUMNS * CELL_EM * LCD.fontSize,
+    });
+    this.lcd.append(this.lcdHead, this.lcdName);
+    this.setPatch({});
     group.append(this.lcd);
     this.svg.append(group);
   }
@@ -505,8 +522,11 @@ export class Pg300Panel {
   /** Show the patch the synth last reported. `{program, name}`, both optional. */
   setPatch(patch) {
     const line = displayText(patch);
-    if (line === this.lcd.textContent) return;
-    this.lcd.textContent = line;
+    if (line === this.line) return;
+    this.line = line;
+    const parts = displayParts(patch);
+    this.lcdHead.textContent = parts.head;
+    this.lcdName.textContent = parts.name;
   }
 
   buildSlider(entry) {

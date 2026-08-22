@@ -44,6 +44,18 @@ export class Router {
     // and ours that has been replaced.
     this.recalled = null;
 
+    // Whether the sound has been altered since it was loaded -- the star the
+    // instrument puts beside the patch number. Set by anything that changes one
+    // parameter, from either side; cleared by anything that loads a whole sound,
+    // which is what makes the edit buffer agree with a stored patch again.
+    //
+    // Deliberately a flag rather than a comparison against the loaded values.
+    // There is nothing here to compare against for most of the ways a sound
+    // arrives -- the synth announces a patch but not what that patch is stored
+    // as, and a knob moved and moved back has still been through the edit buffer
+    // -- so this says what the instrument's own star says: something was touched.
+    this.edited = false;
+
     // Which knobs have actually taken effect since the layer last changed.
     // Straight after a switch this is empty: every knob is physically pointing
     // at a value that belonged to the previous layer and none of them mean
@@ -73,6 +85,7 @@ export class Router {
     this.toneName = '';
     this.patch = null;
     this.recalled = null;
+    this.edited = false;
     this.layer = this.cfg.startupLayer - 1;
   }
 
@@ -147,6 +160,7 @@ export class Router {
     }
 
     this.pending.set(param.index, { value, mapping, param });
+    this.edited = true;
     this.sentOnLayer.add(cc);
     this.report(cc, ccValue, 'mapped', { mapping, value });
     this.schedule();
@@ -169,6 +183,7 @@ export class Router {
     if (bounded === previous) return false;
 
     this.pending.set(paramIndex, { value: bounded, mapping: null, param });
+    this.edited = true;
     if (this.hooks.log) this.hooks.log({ kind: 'panel', param, value: bounded });
     this.schedule();
     return true;
@@ -231,6 +246,10 @@ export class Router {
     // already holding sends no messages and still means that slot is what is
     // loaded, which is what the display is being asked to report.
     this.recalled = slot ? { slot, name } : null;
+    // A whole sound has just been put in the edit buffer, so it is that sound
+    // again rather than an edited version of the last one -- even where every
+    // parameter was already at the right value and nothing was sent.
+    this.edited = false;
 
     if (this.hooks.log) {
       this.hooks.log({ kind: 'recall', slot, name, queued, total: aj.PARAMETERS.length });
@@ -262,6 +281,7 @@ export class Router {
   applyTone(values, { name = '' } = {}) {
     this.pending.clear();
     this.toneName = name;
+    this.edited = false;
     // Whatever preset was recalled has just been replaced wholesale by the one
     // the synth loaded, so the display goes back to reporting the instrument.
     this.recalled = null;
@@ -273,11 +293,13 @@ export class Router {
    *
    * A recalled preset survives this. Editing one parameter does not make the
    * sound a different patch -- the instrument goes on showing the name of the
-   * patch being edited, and so does this.
+   * patch being edited, and so does this. What it does do is star it: the synth
+   * is showing its own star for the same edit, and the two screens should agree.
    */
   applyParam(index, value) {
     if (!aj.PARAMETERS[index]) throw new Error(`no such parameter: ${index}`);
     this.pending.delete(index);
+    this.edited = true;
     this.remember(index, value);
   }
 
@@ -299,6 +321,7 @@ export class Router {
   setPatch(program) {
     this.patch = program;
     this.recalled = null;
+    this.edited = false;
   }
 
   /**

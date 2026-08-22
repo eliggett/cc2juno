@@ -212,6 +212,12 @@ export class PatchPane {
     this.list.hidden = slots.length === 0;
     this.empty.hidden = slots.length !== 0 || !this.emptyHint;
 
+    // Nothing listed yet. Live Patch uses this to put the weight on the one
+    // button worth pressing; see .live-pane .patch-pane.is-empty in the
+    // stylesheet. Set here rather than in whoever opened the file, so that it
+    // stays true through every route into the pane -- a file, a dump, a drag.
+    this.el.classList.toggle('is-empty', slots.length === 0);
+
     const total = this.bank.count();
     this.countEl.textContent = total ? `${total} patch${total === 1 ? '' : 'es'}` : '';
     // The bank on show names its own source when it has one, because several
